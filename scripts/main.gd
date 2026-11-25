@@ -564,7 +564,7 @@ func _bot(delta: float) -> void:
 
 
 # ---------- Actualizaciones desde GitHub ----------
-const REPO := "dysasterkj/arena-de-titanes"
+const REPO := "dysasterkj/Arena-de-titanes-"
 var update_url := ""
 var _dl_id := -1
 var _dl_started := false
