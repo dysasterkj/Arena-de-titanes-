@@ -22,6 +22,7 @@ var guard := false
 var kind := "human"
 var scl := 1.0
 var phase := 0.0
+var relaxed := false
 
 const FOOT := 0.07
 const POSE_R := Vector2(0.7, 1.6)
@@ -73,6 +74,31 @@ func setup(l: Dictionary) -> void:
 	model.scale = Vector3(scl * ww, scl * hh, scl * ww)
 	model.position.y = FOOT
 	add_child(model)
+	# sombra suave bajo los pies
+	var sh := MeshInstance3D.new()
+	var shq := QuadMesh.new()
+	shq.size = Vector2(1.5, 1.5) * scl * clampf(ww, 0.9, 1.4)
+	shq.orientation = PlaneMesh.FACE_Y
+	sh.mesh = shq
+	var shm := StandardMaterial3D.new()
+	shm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	shm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	shm.albedo_color = Color(0.05, 0.03, 0.02, 0.5)
+	var gt := GradientTexture2D.new()
+	gt.fill = GradientTexture2D.FILL_RADIAL
+	gt.fill_from = Vector2(0.5, 0.5)
+	gt.fill_to = Vector2(1.0, 0.5)
+	gt.width = 64
+	gt.height = 64
+	var gr := Gradient.new()
+	gr.set_color(0, Color(1, 1, 1, 1))
+	gr.set_color(1, Color(1, 1, 1, 0))
+	gt.gradient = gr
+	shm.albedo_texture = gt
+	sh.material_override = shm
+	sh.position = Vector3(0, 0.03, 0)
+	sh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(sh)
 	var skin := _col(l.get("skin", "c68642"))
 	var cloth := _col(l.get("cloth", "1d4ed8"))
 	var trim := Color("fbbf24")
@@ -149,6 +175,30 @@ func setup(l: Dictionary) -> void:
 			for i in 9:
 				var a := i * TAU / 9.0
 				Toon.part(body, Toon.cyl(0.0, 0.07, 0.2), trim, Vector3(sin(a) * 0.28 * wide, 0.82, cos(a) * 0.2), Vector3(cos(a) * 0.8, 0, -sin(a) * 0.8), false)
+	if kind == "human":
+		# musculatura: trapecios, abdominales y barriga según la contextura
+		for sx in [-1.0, 1.0]:
+			var trap := Toon.part(body, Toon.sphere(0.11), skin, Vector3(sx * 0.16, 0.82, 0.0), Vector3.ZERO, false)
+			trap.scale = Vector3(1.3, 0.8, 1.0)
+			Toon.part(body, Toon.box(Vector3(0.13, 0.014, 0.012)), skin.darkened(0.22), Vector3(sx * 0.07, 0.3, -0.268), Vector3.ZERO, false)
+			Toon.part(body, Toon.box(Vector3(0.12, 0.014, 0.012)), skin.darkened(0.22), Vector3(sx * 0.07, 0.17, -0.268), Vector3.ZERO, false)
+			Toon.part(body, Toon.sphere(0.17), skin, Vector3(sx * 0.2, 0.0, 0.0), Vector3.ZERO, false)
+		var belly := clampf((ww - 1.0) / 0.5, 0.0, 1.0)
+		if belly > 0.05:
+			var bl := Toon.part(body, Toon.sphere(0.17 + 0.2 * belly), skin, Vector3(0, 0.2, -0.1 - 0.12 * belly), Vector3.ZERO, false)
+			bl.scale = Vector3(1.15, 1.0, 0.95 + 0.4 * belly)
+			if belly > 0.5:
+				Toon.part(body, Toon.sphere(0.03), skin.darkened(0.2), Vector3(0, 0.2, -0.28 - 0.3 * belly), Vector3.ZERO, false)
+		var lean := clampf((1.0 - ww) / 0.3, 0.0, 1.0)
+		if lean > 0.2:
+			for y in [0.5, 0.58, 0.66]:
+				var rib := Toon.part(body, Toon.box(Vector3(0.36, 0.018, 0.02)), skin.darkened(0.16), Vector3(0, y, -0.262), Vector3.ZERO, false)
+				rib.scale.x = 1.0
+		for lg in [leg_l, leg_r]:
+			var calf := Toon.part(lg.get_child(lg.get_child_count() - 1), Toon.sphere(0.105 * thick), skin, Vector3(0, -0.13, 0.05), Vector3.ZERO, false)
+			calf.scale = Vector3(1.0, 1.5, 1.0)
+			var quad := Toon.part(lg, Toon.sphere(0.145 * thick), skin, Vector3(0, -0.2, -0.04), Vector3.ZERO, false)
+			quad.scale = Vector3(1.0, 1.7, 1.0)
 	_armor_visual(String(l.get("armor", "none")), wide)
 
 	# brazos
@@ -305,7 +355,23 @@ func _head_visual(skin: Color, cloth: Color) -> void:
 		_:
 			var big := 1.0 if kind != "troll" else 0.85
 			var hs := 0.27 * big
-			Toon.part(head, Toon.sphere(hs), skin, Vector3(0, 0.2, 0))
+			var skull := Toon.part(head, Toon.sphere(hs), skin, Vector3(0, 0.2, 0))
+			skull.scale = Vector3(0.96, 1.07, 1.0)
+			if kind == "human":
+				# mandíbula, pómulos, labios y orejas para una cara más expresiva
+				var jaw := Toon.part(head, Toon.sphere(0.2), skin, Vector3(0, 0.07, -0.07), Vector3.ZERO, false)
+				jaw.scale = Vector3(1.0, 0.78, 0.95)
+				Toon.part(head, Toon.sphere(0.07), skin.darkened(0.03), Vector3(0, 0.0, -0.2), Vector3.ZERO, false)
+				for sx in [-1.0, 1.0]:
+					Toon.part(head, Toon.sphere(0.075), skin.lightened(0.05), Vector3(sx * 0.15, 0.15, -0.19), Vector3.ZERO, false)
+					Toon.part(head, Toon.sphere(0.034), Color("c2603f").lerp(skin, 0.35), Vector3(sx * 0.17, 0.12, -0.2), Vector3.ZERO, false)
+					Toon.part(head, Toon.sphere(0.035), skin.darkened(0.25), Vector3(sx * 0.268, 0.2, -0.005), Vector3.ZERO, false)
+					var lid := Toon.part(head, Toon.sphere(0.062), skin.darkened(0.06), Vector3(sx * 0.1, 0.255, -0.228), Vector3.ZERO, false)
+					lid.scale = Vector3(1.05, 0.55, 0.6)
+				var lip_c := Color("a8453a").lerp(skin, 0.3)
+				Toon.part(head, Toon.capsule(0.022, 0.1), lip_c.lightened(0.05), Vector3(0, 0.112, -0.255), Vector3(0, 0, PI / 2), false)
+				Toon.part(head, Toon.capsule(0.026, 0.08), lip_c, Vector3(0, 0.082, -0.248), Vector3(0, 0, PI / 2), false)
+				Toon.part(head, Toon.capsule(0.022, 0.1), skin.darkened(0.04), Vector3(0, 0.215, -0.27), Vector3(0.2, 0, 0), false)
 			# ojos con blanco, pupila y cejas
 			for sx in [-1.0, 1.0]:
 				var eye := Toon.part(head, Toon.sphere(0.058), Color("fafafa"), Vector3(sx * 0.1, 0.235, -0.232 * big), Vector3.ZERO, false)
@@ -538,10 +604,20 @@ func _process(delta: float) -> void:
 		model.position.y = sin(t * 2.2 + phase) * 0.03 + FOOT
 		body.rotation.x = lerpf(body.rotation.x, sin(t * 2.2 + phase) * 0.03 + slouch, 0.2)
 		var tgt_l := Vector2(1.55, 1.55) if guard else POSE_L
+		var tgt_r := POSE_R
+		var zl := 0.15
+		var zr := -0.15
+		if relaxed:
+			tgt_l = Vector2(0.08, 0.28)
+			tgt_r = Vector2(0.08, 0.28)
+			zl = 0.13
+			zr = -0.13
 		arm_l.rotation.x = lerpf(arm_l.rotation.x, tgt_l.x + sin(t * 2.0 + phase) * 0.05, 0.15)
 		fore_l.rotation.x = lerpf(fore_l.rotation.x, tgt_l.y, 0.15)
-		arm_r.rotation.x = lerpf(arm_r.rotation.x, POSE_R.x + sin(t * 2.0 + phase + 1.0) * 0.05 + slouch * 0.6, 0.15)
-		fore_r.rotation.x = lerpf(fore_r.rotation.x, POSE_R.y, 0.15)
+		arm_r.rotation.x = lerpf(arm_r.rotation.x, tgt_r.x + sin(t * 2.0 + phase + 1.0) * 0.05 + slouch * 0.6, 0.15)
+		fore_r.rotation.x = lerpf(fore_r.rotation.x, tgt_r.y, 0.15)
+		arm_l.rotation.z = lerpf(arm_l.rotation.z, zl, 0.15)
+		arm_r.rotation.z = lerpf(arm_r.rotation.z, zr, 0.15)
 		model.rotation.y = lerpf(model.rotation.y, 0.0, 0.2)
 		body.rotation.y = lerpf(body.rotation.y, 0.0, 0.2)
 		head.rotation.x = lerpf(head.rotation.x, slouch * 0.5, 0.2)

@@ -186,9 +186,12 @@ func _bar(color: Color, w: float = 240.0, h: float = 16.0) -> ProgressBar:
 
 
 var preview_ov := {}
+var char_focus := "body"
 
 
 func _show(id: String) -> void:
+	if id != "char":
+		char_focus = "body"
 	if id != "shop" and not preview_ov.is_empty():
 		preview_ov.clear()
 		preview_changed.emit()
@@ -427,32 +430,49 @@ func open_shop(tab: String = "") -> void:
 
 
 func _item_row(it: Dictionary) -> Control:
+	var tab := shop_tab
+	var id: String = it.id
+	var owned := GameState.owns(tab, id)
+	var lvl := GameState.item_level(tab, id)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var tv := VBoxContainer.new()
 	tv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var stat_txt := ("Daño %d" % int(it.dmg)) if it.has("dmg") else (("Defensa +%d" % int(it.def)) if it.has("def") else "Estilo")
-	tv.add_child(_lbl("%s   (%s)" % [it.name, stat_txt], 17, Color.WHITE))
-	var dl := _lbl(String(it.desc), 13, C_MUTED)
-	tv.add_child(dl)
+	var stat_txt := "Estilo"
+	if it.has("dmg"):
+		stat_txt = "Daño %d" % GameState.eff_dmg(tab, it)
+	elif it.has("def"):
+		stat_txt = "Defensa +%d" % GameState.eff_def(tab, it)
+	elif it.has("perk"):
+		var tot := int(it.pv) * (1 + lvl)
+		stat_txt = "+%d %s" % [tot, GameState.PERK_NAMES[it.perk]]
+	var nm := "%s   (%s)" % [it.name, stat_txt]
+	if lvl > 0:
+		nm += "  Nv %d" % lvl
+	tv.add_child(_lbl(nm, 17, Color.WHITE))
+	tv.add_child(_lbl(String(it.desc), 13, C_MUTED))
+	if id != "none" and GameState.can_upgrade(tab, id) or (owned and lvl >= GameState.MAX_UP):
+		var up_txt := "Cada mejora: " + GameState.gain_text(tab, it) if lvl < GameState.MAX_UP else "Mejora al máximo"
+		tv.add_child(_lbl(up_txt, 13, Color("86efac")))
 	row.add_child(tv)
-	var tab := shop_tab
-	var id: String = it.id
-	var owned := GameState.owns(tab, id)
+	var rc := VBoxContainer.new()
+	rc.add_theme_constant_override("separation", 4)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 4)
 	var b: Button
 	if owned:
 		if GameState.equipped(tab) == id:
-			b = _btn("EQUIPADO", Color("166534"), 14, 120, 48)
+			b = _btn("EQUIPADO", Color("166534"), 14, 120, 44)
 			b.disabled = true
 		else:
-			b = _btn("EQUIPAR", Color("0d9488"), 16, 120, 48)
+			b = _btn("EQUIPAR", Color("0d9488"), 16, 120, 44)
 			b.pressed.connect(func():
 				GameState.equip(tab, id)
 				preview_ov.erase(tab)
 				preview_changed.emit()
 				open_shop())
 	else:
-		b = _btn("● %d" % int(it.cost), C_BTN, 16, 120, 48)
+		b = _btn("● %d" % int(it.cost), C_BTN, 16, 120, 44)
 		b.disabled = int(GameState.data.gold) < int(it.cost)
 		b.pressed.connect(func():
 			if GameState.buy_item(tab, id):
@@ -462,13 +482,25 @@ func _item_row(it: Dictionary) -> Control:
 				open_shop())
 	var eq_now := owned and GameState.equipped(tab) == id
 	if not eq_now:
-		var vb := _btn("VER", Color("1d4ed8") if preview_ov.get(tab, "") != id else Color("166534"), 15, 64, 48)
+		var vb := _btn("VER", Color("1d4ed8") if preview_ov.get(tab, "") != id else Color("166534"), 15, 56, 44)
 		vb.pressed.connect(func():
 			preview_ov[tab] = id
 			preview_changed.emit()
 			open_shop())
-		row.add_child(vb)
-	row.add_child(b)
+		top.add_child(vb)
+	top.add_child(b)
+	rc.add_child(top)
+	if owned and GameState.can_upgrade(tab, id):
+		var cost := GameState.upgrade_cost(tab, id)
+		var ub := _btn("MEJORAR ● %d" % cost, Color("a16207"), 14, 180, 36)
+		ub.disabled = int(GameState.data.gold) < cost
+		ub.pressed.connect(func():
+			if GameState.upgrade_item(tab, id):
+				Sfx.play("levelup")
+				preview_changed.emit()
+				open_shop())
+		rc.add_child(ub)
+	row.add_child(rc)
 	return row
 
 
@@ -862,6 +894,7 @@ func open_char() -> void:
 		var left := _btn("<", C_BTN, 22, 48, 38)
 		left.pressed.connect(func():
 			GameState.cycle_char(key, -1)
+			char_focus = key
 			preview_changed.emit()
 			open_char())
 		hb.add_child(left)
@@ -877,6 +910,7 @@ func open_char() -> void:
 		var right := _btn(">", C_BTN, 22, 48, 38)
 		right.pressed.connect(func():
 			GameState.cycle_char(key, 1)
+			char_focus = key
 			preview_changed.emit()
 			open_char())
 		hb.add_child(right)
@@ -947,8 +981,8 @@ func open_ach() -> void:
 
 
 ## Cartel grande que aparece con efecto de rebote (¡PELEA!, ¡K.O.!).
-func banner(text: String, color: Color = C_GOLD) -> void:
-	var l := _lbl(text, 76, color, HORIZONTAL_ALIGNMENT_CENTER)
+func banner(text: String, color: Color = C_GOLD, size: int = 76) -> void:
+	var l := _lbl(text, size, color, HORIZONTAL_ALIGNMENT_CENTER)
 	l.add_theme_constant_override("outline_size", 14)
 	l.add_theme_color_override("font_outline_color", Color("2a0f05"))
 	float_layer.add_child(l)

@@ -6,6 +6,9 @@ const Toon = preload("res://scripts/toon.gd")
 var env: Environment
 var sky_mat: ProceduralSkyMaterial
 var sun: DirectionalLight3D
+var torch_lights: Array = []
+var trim_mat: ShaderMaterial
+var niche_mat: ShaderMaterial
 var sand_mat: ShaderMaterial
 var wall_mat: ShaderMaterial
 var stand_mat: ShaderMaterial
@@ -86,7 +89,11 @@ func _ready() -> void:
 	wall_mat = _mat(_noise_tex(0.07, true), 0.55, 0.32, _noise_tex(0.12, false, 3), 0.35, 5.0)
 	stand_mat = _mat(_noise_tex(0.07, true), 0.45, 0.3, _noise_tex(0.1, false, 3), 0.3, 4.0)
 	banner_mat = _mat()
-	for m2 in [sand_mat, wall_mat, stand_mat, banner_mat]:
+	trim_mat = _mat()
+	trim_mat.set_shader_parameter("albedo", Color("c8962e"))
+	niche_mat = _mat()
+	niche_mat.set_shader_parameter("albedo", Color("1a1410"))
+	for m2 in [sand_mat, wall_mat, stand_mat, banner_mat, trim_mat, niche_mat]:
 		m2.set_shader_parameter("ground_ao", 0.0)
 
 	var floor_mi := MeshInstance3D.new()
@@ -111,6 +118,12 @@ func _ready() -> void:
 		var p := dir * wall_r
 		_box(self, Vector3(2.7, 3.2, 1.0), Vector3(p.x, 1.6, p.z), wall_mat, a)
 		_box(self, Vector3(2.8, 0.25, 1.1), Vector3(p.x, 3.3, p.z), stand_mat, a)
+		_box(self, Vector3(2.82, 0.1, 1.12), Vector3(p.x, 3.1, p.z), trim_mat, a)
+		if i % 3 == 1:
+			var nq := dir * (wall_r - 0.55)
+			_box(self, Vector3(1.4, 2.1, 0.12), Vector3(nq.x, 1.3, nq.z), niche_mat, a)
+			_box(self, Vector3(1.6, 0.14, 0.2), Vector3(nq.x, 2.4, nq.z), trim_mat, a)
+			_box(self, Vector3(1.0, 0.1, 0.14), Vector3(nq.x, 2.55, nq.z), trim_mat, a)
 		if i % 3 == 0:
 			var q := dir * (wall_r - 0.52)
 			_box(self, Vector3(0.7, 3.3, 0.5), Vector3(q.x, 1.65, q.z), stand_mat, a)
@@ -141,11 +154,12 @@ func _ready() -> void:
 		var bm := _box(self, Vector3(1.0, 2.4, 0.06), Vector3(b.x, 4.6, b.z) - dir * 0.6, banner_mat, a)
 		Toon.glow(self, Toon.sphere(0.22), Color("fde047"), bm.position - dir * 0.07 + Vector3(0, 0.4, 0))
 		Toon.part(self, Toon.box(Vector3(1.05, 0.08, 0.1)), Color("fbbf24"), bm.position - dir * 0.05 + Vector3(0, 1.22, 0), Vector3(0, a, 0), false)
-		if i == 2 or i == 8:
+		if i % 3 == 2:
 			var ol := OmniLight3D.new()
 			ol.position = fl.position + Vector3(0, 0.2, 0) - dir * 1.0
 			ol.light_color = Color("ff9a3d")
-			ol.light_energy = 1.4
+			ol.light_energy = 0.9
+			torch_lights.append(ol)
 			ol.omni_range = 11.0
 			add_child(ol)
 
@@ -177,6 +191,8 @@ func _process(delta: float) -> void:
 		var f: Node3D = flames[i]
 		var s := 1.0 + sin(t * 11.0 + i * 1.7) * 0.12 + sin(t * 17.0 + i) * 0.07
 		f.scale = Vector3(1.0 / sqrt(s), s, 1.0 / sqrt(s))
+	for i in torch_lights.size():
+		(torch_lights[i] as OmniLight3D).light_energy = 0.9 + sin(t * 9.0 + i * 2.1) * 0.18 + sin(t * 23.0 + i) * 0.08
 
 
 func _build_environment() -> void:
@@ -189,7 +205,7 @@ func _build_environment() -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.9, 0.85, 0.8)
-	env.ambient_light_energy = 0.62
+	env.ambient_light_energy = 0.5
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
 	env.fog_depth_begin = 40.0
@@ -197,10 +213,36 @@ func _build_environment() -> void:
 	we.environment = env
 	add_child(we)
 	sun = DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, -35, 0)
+	sun.rotation_degrees = Vector3(-42, -25, 0)
 	sun.light_energy = 1.0
 	sun.light_color = Color("fff1d6")
 	add_child(sun)
+	sun.shadow_enabled = false
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun.directional_shadow_max_distance = 26.0
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.0
+	sun.shadow_blur = 2.0
+	sun.shadow_opacity = 0.7
+	# polvo flotando en la luz de la arena
+	var dust := CPUParticles3D.new()
+	dust.amount = 70
+	dust.lifetime = 7.0
+	dust.preprocess = 7.0
+	dust.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	dust.emission_box_extents = Vector3(10, 2.5, 8)
+	dust.position = Vector3(0, 2.5, 0)
+	dust.direction = Vector3(0.4, 0.1, 0)
+	dust.spread = 180.0
+	dust.initial_velocity_min = 0.1
+	dust.initial_velocity_max = 0.35
+	dust.gravity = Vector3(0, 0.03, 0)
+	var dm := QuadMesh.new()
+	dm.size = Vector2(0.035, 0.035)
+	dm.material = Toon.glow_mat(Color("ffe9b0"))
+	dust.mesh = dm
+	dust.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(dust)
 
 
 # ---------- Público: muñecos como los luchadores ----------

@@ -63,7 +63,11 @@ const SKILLS := [
 	{"id": "escudazo", "name": "Escudazo", "lvl": 4, "en": 14, "mult": 0.9, "acc": 0.1, "stun": 1, "desc": "Aturde al rival 1 turno."},
 	{"id": "rayo", "name": "Rayo", "lvl": 5, "en": 22, "mag": 1.6, "acc": 0.12, "ranged": true, "color": "60a5fa", "desc": "Casi nunca falla."},
 	{"id": "furia", "name": "Furia titán", "lvl": 6, "en": 26, "mult": 2.9, "acc": -0.1, "desc": "El golpe más fuerte."},
+	{"id": "hielo", "name": "Lanza de hielo", "lvl": 7, "en": 20, "mag": 1.2, "acc": 0.08, "ranged": true, "color": "67e8f9", "weak": 1, "desc": "Daña y debilita: el rival pega 35% menos."},
 	{"id": "plegaria", "name": "Plegaria", "lvl": 8, "en": 22, "heal": 0.45, "desc": "Recupera el 45% de vida."},
+	{"id": "drenar", "name": "Drenar vida", "lvl": 9, "en": 24, "mag": 1.0, "acc": 0.05, "ranged": true, "color": "a855f7", "steal": 0.6, "desc": "Te curas con parte del daño."},
+	{"id": "meteoro", "name": "Meteoro", "lvl": 10, "en": 34, "mag": 2.5, "acc": -0.08, "ranged": true, "color": "ef4444", "desc": "Magia devastadora a distancia."},
+	{"id": "piedra", "name": "Piel de piedra", "lvl": 11, "en": 24, "buff_def": 6, "color": "a8a29e", "desc": "+6 Defensa durante el combate."},
 ]
 
 const ARENAS := [
@@ -100,7 +104,7 @@ func default_data() -> Dictionary:
 	return {
 		"gold": 60, "xp": 0, "points": 0,
 		"stats": {"vit": 5, "fue": 5, "agi": 5, "def": 5, "ene": 5},
-		"owned": ["weapon:espada_corta"],
+		"owned": ["weapon:espada_corta"], "upg": {},
 		"equip": {"weapon": "espada_corta", "helmet": "none", "armor": "none", "shield": "none", "outfit": "none", "cape": "none", "paint": "none"},
 		"char": {"height": 1.0, "fat": 1.0, "skin": "c68642", "hair": "short", "hair_c": "3b2314", "beard": "none", "cloth": "1d4ed8"},
 		"counters": {}, "ach_claimed": [], "ach_seen": [],
@@ -180,6 +184,83 @@ func equip(tab: String, id: String) -> void:
 	if owns(tab, id):
 		data.equip[tab] = id
 		save_game()
+
+
+# ---------- Mejora de objetos ----------
+const MAX_UP := 5
+const PERK_NAMES := {"fue": "Ataque", "agi": "Puntería", "def": "Defensa", "vit": "Vida", "ene": "Energía"}
+
+
+func item_level(tab: String, id: String) -> int:
+	return int(data.upg.get("%s:%s" % [tab, id], 0))
+
+
+## Lo que gana el objeto por cada nivel de mejora: {"dmg":n} / {"def":n} / {"perk":stat, "v":n}
+func upgrade_gain(tab: String, it: Dictionary) -> Dictionary:
+	if tab == "weapon":
+		return {"dmg": maxi(1, int(round(float(it.dmg) * 0.12)))}
+	if it.has("def") and int(it.def) > 0:
+		return {"def": maxi(1, int(round(float(it.def) * 0.15)))}
+	if it.has("perk"):
+		return {"perk": String(it.perk), "v": int(it.pv)}
+	return {}
+
+
+func can_upgrade(tab: String, id: String) -> bool:
+	var it := item_def(tab, id)
+	return id != "none" and not upgrade_gain(tab, it).is_empty() and item_level(tab, id) < MAX_UP
+
+
+func upgrade_cost(tab: String, id: String) -> int:
+	var it := item_def(tab, id)
+	var base := maxi(int(it.cost), 100)
+	return int(base * 0.4 * (item_level(tab, id) + 1)) + 40
+
+
+func upgrade_item(tab: String, id: String) -> bool:
+	if not owns(tab, id) or not can_upgrade(tab, id):
+		return false
+	var c := upgrade_cost(tab, id)
+	if int(data.gold) < c:
+		return false
+	data.gold = int(data.gold) - c
+	bump("spent", c)
+	data.upg["%s:%s" % [tab, id]] = item_level(tab, id) + 1
+	save_game()
+	return true
+
+
+func gain_text(tab: String, it: Dictionary) -> String:
+	var g := upgrade_gain(tab, it)
+	if g.has("dmg"):
+		return "+%d Daño" % int(g.dmg)
+	if g.has("def"):
+		return "+%d Defensa%s" % [int(g.def), " y el escudo aguanta más" if tab == "shield" else ""]
+	if g.has("perk"):
+		return "+%d %s" % [int(g.v), PERK_NAMES[g.perk]]
+	return ""
+
+
+## Valor efectivo de daño/defensa con la mejora aplicada
+func eff_dmg(tab: String, it: Dictionary) -> int:
+	return int(it.dmg) + item_level(tab, String(it.id)) * int(upgrade_gain(tab, it).get("dmg", 0))
+
+
+func eff_def(tab: String, it: Dictionary) -> int:
+	return int(it.get("def", 0)) + item_level(tab, String(it.id)) * int(upgrade_gain(tab, it).get("def", 0))
+
+
+## Bonos de estadística de trajes, capas y pinturas equipados (con su nivel)
+func perk_bonus() -> Dictionary:
+	var out := {"fue": 0, "agi": 0, "def": 0, "vit": 0, "ene": 0}
+	for tab in ["outfit", "cape", "paint"]:
+		var id := equipped(tab)
+		if id == "none":
+			continue
+		var it := item_def(tab, id)
+		if it.has("perk"):
+			out[it.perk] += int(it.pv) * (1 + item_level(tab, id))
+	return out
 
 
 func buy_potion(id: String) -> bool:
@@ -285,13 +366,15 @@ func player_fighter() -> Dictionary:
 	var s := item_def("shield", equipped("shield"))
 	var fx := body_effects()
 	var ch: Dictionary = data.char
+	var pk := perk_bonus()
+	var sdef := eff_def("shield", s)
 	return {
 		"name": "Tú", "is_player": true, "level": level(),
-		"max_hp": (40 + stat("vit") * 10) * float(fx.hp), "max_en": (20 + stat("ene") * 6) * float(fx.en),
-		"fue": stat("fue") + float(fx.fue), "agi": stat("agi") + float(fx.agi),
-		"def": stat("def") * 1.2 + int(h.def) + int(a.def) + int(s.def) + float(fx.def),
-		"wdmg": int(w.dmg), "wacc": float(w.acc),
-		"magic": 10.0 + stat("ene") * 1.4 + level() * 1.5, "weapon_id": w.id, "armed": true, "shield_def": int(s.def), "shield_max": int(s.def) * 14,
+		"max_hp": (40 + stat("vit") * 10 + int(pk.vit) * 8) * float(fx.hp), "max_en": (20 + stat("ene") * 6 + int(pk.ene) * 5) * float(fx.en),
+		"fue": stat("fue") + float(fx.fue) + int(pk.fue), "agi": stat("agi") + float(fx.agi) + int(pk.agi),
+		"def": stat("def") * 1.2 + eff_def("helmet", h) + eff_def("armor", a) + sdef + float(fx.def) + int(pk.def),
+		"wdmg": eff_dmg("weapon", w), "wacc": float(w.acc),
+		"magic": 10.0 + stat("ene") * 1.4 + level() * 1.5, "weapon_id": w.id, "armed": true, "shield_def": sdef, "shield_max": sdef * 14,
 		"acc_high": float(fx.acc_high), "acc_low": float(fx.acc_low), "evade": float(fx.evade), "regen": float(fx.regen),
 		"look": {"kind": "human", "skin": ch.skin, "cloth": ch.cloth, "hair": ch.hair, "hair_c": ch.hair_c, "beard": ch.beard,
 			"height": float(ch.height), "fat": float(ch.fat),
@@ -361,12 +444,12 @@ func register_loss() -> void:
 
 # ======================= Personaje editable =======================
 const HEIGHTS := [
-	{"name": "Muy bajo", "value": 0.84}, {"name": "Bajo", "value": 0.92}, {"name": "Normal", "value": 1.0},
-	{"name": "Alto", "value": 1.08}, {"name": "Muy alto", "value": 1.17},
+	{"name": "Muy bajo", "value": 0.76}, {"name": "Bajo", "value": 0.88}, {"name": "Normal", "value": 1.0},
+	{"name": "Alto", "value": 1.11}, {"name": "Muy alto", "value": 1.24},
 ]
 const FATS := [
-	{"name": "Muy flaco", "value": 0.84}, {"name": "Delgado", "value": 0.93}, {"name": "Normal", "value": 1.0},
-	{"name": "Robusto", "value": 1.12}, {"name": "Gordo", "value": 1.26},
+	{"name": "Muy flaco", "value": 0.72}, {"name": "Delgado", "value": 0.86}, {"name": "Normal", "value": 1.0},
+	{"name": "Corpulento", "value": 1.2}, {"name": "Gordo", "value": 1.5},
 ]
 const SKINS := [
 	{"name": "Claro", "value": "f1c27d"}, {"name": "Trigueño", "value": "e0ac69"}, {"name": "Canela", "value": "c68642"},
@@ -438,8 +521,8 @@ func cycle_char(key: String, dir: int) -> void:
 
 ## x: -1 (muy bajo) .. 1 (muy alto); y: -1 (muy flaco) .. 1 (muy gordo)
 func body_axes() -> Vector2:
-	var t := clampf((float(data.char.height) - 1.0) / 0.17, -1.0, 1.0)
-	var f := clampf((float(data.char.fat) - 1.0) / 0.26, -1.0, 1.0)
+	var t := clampf((float(data.char.height) - 1.0) / 0.24, -1.0, 1.0)
+	var f := clampf((float(data.char.fat) - 1.0) / (0.5 if float(data.char.fat) > 1.0 else 0.28), -1.0, 1.0)
 	return Vector2(t, f)
 
 
@@ -500,27 +583,27 @@ func body_effects_text() -> Array:
 # ======================= Cosméticos =======================
 const OUTFITS := [
 	{"id": "none", "name": "Túnica básica", "cost": 0, "desc": "Del color que elijas."},
-	{"id": "romana", "name": "Túnica romana", "cost": 120, "desc": "Roja con bordes dorados."},
-	{"id": "toga", "name": "Toga imperial", "cost": 160, "desc": "Blanca y larga."},
-	{"id": "pieles", "name": "Pieles de bárbaro", "cost": 220, "desc": "Con cuello de pelo."},
-	{"id": "espartano", "name": "Traje espartano", "cost": 320, "desc": "Granate y bronce."},
-	{"id": "sombras", "name": "Traje de las sombras", "cost": 450, "desc": "Negro con detalles rojos."},
-	{"id": "gala", "name": "Gala del campeón", "cost": 700, "desc": "Púrpura y oro."},
+	{"id": "romana", "name": "Túnica romana", "cost": 120, "desc": "Roja con bordes dorados.", "perk": "fue", "pv": 1},
+	{"id": "toga", "name": "Toga imperial", "cost": 160, "desc": "Blanca y larga.", "perk": "ene", "pv": 1},
+	{"id": "pieles", "name": "Pieles de bárbaro", "cost": 220, "desc": "Con cuello de pelo.", "perk": "vit", "pv": 1},
+	{"id": "espartano", "name": "Traje espartano", "cost": 320, "desc": "Granate y bronce.", "perk": "def", "pv": 1},
+	{"id": "sombras", "name": "Traje de las sombras", "cost": 450, "desc": "Negro con detalles rojos.", "perk": "agi", "pv": 2},
+	{"id": "gala", "name": "Gala del campeón", "cost": 700, "desc": "Púrpura y oro.", "perk": "def", "pv": 2},
 ]
 const CAPES := [
 	{"id": "none", "name": "Sin capa", "cost": 0, "desc": "Ligero."},
-	{"id": "roja", "name": "Capa roja", "cost": 100, "desc": "Clásica."},
-	{"id": "azul", "name": "Capa azul", "cost": 100, "desc": "Fresca."},
-	{"id": "negra", "name": "Capa negra", "cost": 160, "desc": "Misteriosa."},
-	{"id": "lobo", "name": "Capa de lobo", "cost": 260, "desc": "Con pelaje gris."},
-	{"id": "dorada", "name": "Capa dorada", "cost": 900, "desc": "Solo para campeones."},
+	{"id": "roja", "name": "Capa roja", "cost": 100, "desc": "Clásica.", "perk": "fue", "pv": 1},
+	{"id": "azul", "name": "Capa azul", "cost": 100, "desc": "Fresca.", "perk": "ene", "pv": 1},
+	{"id": "negra", "name": "Capa negra", "cost": 160, "desc": "Misteriosa.", "perk": "agi", "pv": 1},
+	{"id": "lobo", "name": "Capa de lobo", "cost": 260, "desc": "Con pelaje gris.", "perk": "vit", "pv": 2},
+	{"id": "dorada", "name": "Capa dorada", "cost": 900, "desc": "Solo para campeones.", "perk": "fue", "pv": 3},
 ]
 const PAINTS := [
 	{"id": "none", "name": "Sin pintura", "cost": 0, "desc": "Cara limpia."},
-	{"id": "guerra", "name": "Pintura de guerra", "cost": 60, "desc": "Rayas rojas."},
-	{"id": "tigre", "name": "Rayas de tigre", "cost": 90, "desc": "Naranja salvaje."},
-	{"id": "calavera", "name": "Calavera", "cost": 140, "desc": "Da miedo."},
-	{"id": "rayo", "name": "Rayo", "cost": 200, "desc": "Brillante."},
+	{"id": "guerra", "name": "Pintura de guerra", "cost": 60, "desc": "Rayas rojas.", "perk": "fue", "pv": 1},
+	{"id": "tigre", "name": "Rayas de tigre", "cost": 90, "desc": "Naranja salvaje.", "perk": "agi", "pv": 1},
+	{"id": "calavera", "name": "Calavera", "cost": 140, "desc": "Da miedo.", "perk": "def", "pv": 1},
+	{"id": "rayo", "name": "Rayo", "cost": 200, "desc": "Brillante.", "perk": "ene", "pv": 2},
 ]
 
 

@@ -74,6 +74,8 @@ func _ready() -> void:
 			test_set = a.substr(6)
 		elif a.begins_with("--page="):
 			test_page = a.substr(7)
+		elif a.begins_with("--focus="):
+			test_focus = a.substr(8)
 	if autoplay:
 		Engine.time_scale = 4.0
 		base_time_scale = 4.0
@@ -117,6 +119,8 @@ func _ready() -> void:
 	_to_menu()
 	if test_page == "char":
 		ui.open_char()
+		if test_focus != "":
+			ui.char_focus = test_focus
 	elif test_page == "ach":
 		ui.open_ach()
 	elif test_page == "shop":
@@ -145,14 +149,17 @@ func _refresh_preview() -> void:
 		lk[k] = ui.preview_ov[k]
 	pf.setup(lk)
 	pf.position = Vector3.ZERO
-	pf.rotation.y = PI * 0.82
+	pf.rotation.y = PI + 0.22 if pf.relaxed else PI * 0.82
 	ef.visible = false
 
 
 func _on_page(page: String) -> void:
 	if state != State.MENU:
 		return
-	cam_mode = "menu" if page in ["menu", "update", "fights", "ach"] else "shop"
+	cam_mode = "menu" if page in ["menu", "update", "fights", "ach"] else ("char" if page == "char" else "shop")
+	if (page == "char") != pf.relaxed:
+		pf.relaxed = page == "char"
+		pf.rotation.y = PI + 0.22 if pf.relaxed else PI * 0.82
 
 
 func _to_menu() -> void:
@@ -175,6 +182,15 @@ func _update_camera(delta: float) -> void:
 		"menu":
 			pos = Vector3(2.6, 1.9, 6.4)
 			look = Vector3(0, 0.95, 0)
+		"char":
+			var hgt := float(GameState.data.char.height)
+			var head_y := 1.98 * hgt + 0.05
+			if ui.char_focus in ["skin", "hair", "hair_c", "beard"]:
+				pos = Vector3(0.0, head_y + 0.1, 5.2)
+				look = Vector3(0, head_y + 0.2, 0)
+			else:
+				pos = Vector3(0.0, 2.0 + (hgt - 1.0) * 2.0, 7.4 + (hgt - 1.0) * 7.0)
+				look = Vector3(0, 0.35 + (hgt - 1.0) * 1.8, 0)
 		"shop":
 			pos = Vector3(2.2, 2.0, 8.4)
 			look = Vector3(0, 0.35, 0)
@@ -187,7 +203,7 @@ func _update_camera(delta: float) -> void:
 				pos = Vector3(-4.4, 3.3, 8.6)
 				camera.fov = lerpf(camera.fov, 58.0 - cam_punch * 6.0, 0.3)
 				look = Vector3(0.7, 0.0, -0.8)
-	var vo := -1.75 if cam_mode == "shop" else (-0.5 if cam_mode == "battle" else 0.0)
+	var vo := -1.75 if cam_mode == "shop" else (-1.75 if cam_mode == "char" else (-0.5 if cam_mode == "battle" else 0.0))
 	camera.v_offset = lerpf(camera.v_offset, vo, 1.0 - exp(-5.0 * delta))
 	var k := 1.0 - exp(-4.0 * delta)
 	cam_pos = cam_pos.lerp(pos, k)
@@ -236,6 +252,7 @@ var near := false
 var debris: Array = []
 var base_time_scale := 1.0
 var pending_crit := false
+var test_focus := ""
 var drag_idle := 0.0
 var slowmo_id := 0
 var cam_punch := 0.0
@@ -347,7 +364,7 @@ func _raw_damage(att: Dictionary, mult: float) -> float:
 
 
 func _crit_chance(att: Dictionary, near_melee: bool, zone: String) -> float:
-	return 0.06 + (0.14 if near_melee else 0.0) + (0.06 if zone == "head" else 0.0) + float(att.fue) * 0.003
+	return 0.025 + (0.07 if near_melee else 0.0) + (0.03 if zone == "head" else 0.0) + float(att.fue) * 0.0015
 
 
 func _player_actions() -> Dictionary:
@@ -368,6 +385,12 @@ func _player_actions() -> Dictionary:
 	var skills: Array = []
 	for s in GameState.unlocked_skills():
 		var sub := "%d EN" % int(s.en)
+		if s.has("buff_def"):
+			sub += " · +%d DEF" % int(s.buff_def)
+		if s.has("weak"):
+			sub += " · debilita"
+		if s.has("steal"):
+			sub += " · te cura"
 		if s.has("mult") or s.has("mag"):
 			sub += " · %d%%" % int(round(_chance(p, e, float(s.acc)) * 100.0))
 		if bool(s.get("ranged", false)):
@@ -492,6 +515,18 @@ func _skill(id: String) -> bool:
 		_refresh()
 		await get_tree().create_timer(0.6).timeout
 		return false
+	if s.has("buff_def"):
+		p.en = float(p.en) - float(s.en)
+		p.def = float(p.def) + float(s.buff_def)
+		pf.pray()
+		Sfx.play("heal")
+		await get_tree().create_timer(0.5).timeout
+		ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d DEF" % int(s.buff_def), Color("d6d3d1"), 34)
+		_impact(pf.global_position + Vector3(0, 1.2, 0), Color(String(s.color)), false)
+		ui.set_log("¡%s!" % s.name, Color("d6d3d1"))
+		_refresh()
+		await get_tree().create_timer(0.6).timeout
+		return false
 	if bool(s.get("ranged", false)):
 		return await _cast(p, e, pf, ef, s)
 	var spec := {"label": s.name, "cost": s.en, "mult": s.mult, "acc": s.acc, "anim": "spin" if id == "torbellino" else ("mid" if id == "escudazo" else "power"), "zone": "body", "stun": int(s.get("stun", 0))}
@@ -505,10 +540,11 @@ func _apply_damage(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, dm
 	var crit: bool = bool(o["force_crit"]) if o.has("force_crit") else (not bool(o.get("no_crit", false)) and rng.randf() < _crit_chance(att, near_melee, zone))
 	var dmg := dmg_in
 	if crit:
-		dmg *= 1.5 + (0.3 if near_melee else 0.0)
+		dmg *= 2.4 + (0.4 if near_melee else 0.0)
 		if bool(att.is_player):
 			GameState.bump("crits")
 		Sfx.play("crit")
+		ui.banner("¡GOLPE CERTERO!", Color("fbbf24"), 54)
 		Sfx.play("crowd_oh", 1.0, -4.0)
 		if not o.has("force_crit"):
 			_slowmo(0.3, 0.5)
@@ -547,7 +583,7 @@ func _apply_damage(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, dm
 		_hit_sfx(df)
 	defn.hp = float(defn.hp) - d
 	_impact(df.global_position + Vector3(0, 1.3 * df.scl, 0), Color("93c5fd") if blocked else Color("fde68a"), crit)
-	cam_punch = maxf(cam_punch, 1.0 if crit else 0.45)
+	cam_punch = maxf(cam_punch, 2.2 if crit else 0.45)
 	_cheer(2.2 if crit else 1.5)
 	if float(defn.hp) <= 0.0:
 		_slowmo(0.18, 1.6)
@@ -555,7 +591,7 @@ func _apply_damage(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, dm
 	df.set_health(maxf(0.0, float(defn.hp)) / float(defn.max_hp))
 	if not shield_ok:
 		_blood(df, _dir_to(af, df), d, crit, zone)
-	shake = 0.5 + (0.5 if crit else 0.0) + (0.3 if bool(o.get("strong", false)) else 0.0)
+	shake = 0.5 + (1.0 if crit else 0.0) + (0.3 if bool(o.get("strong", false)) else 0.0)
 	var txt := "-%d" % d
 	if crit:
 		txt = "¡CRÍTICO! -%d" % d
@@ -744,7 +780,16 @@ func _cast(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dict
 		tw2.chain().tween_callback(sp.queue_free)
 	if rng.randf() < _chance(att, defn, float(spec.acc)):
 		var raw := float(att.magic) * float(spec.mag) * rng.randf_range(0.9, 1.1) + 4.0
-		_apply_damage(att, defn, af, df, raw - float(defn.def) * 0.2, {"zone": "body", "strong": true, "near_melee": false})
+		var dealt := maxf(1.0, raw - float(defn.def) * 0.2)
+		_apply_damage(att, defn, af, df, dealt, {"zone": "body", "strong": true, "near_melee": false})
+		if spec.has("weak"):
+			defn.weak = int(spec.weak)
+			ui.float_text(df.global_position + Vector3(0, 3.0, 0), "¡Debilitado!", Color("67e8f9"), 26)
+		if spec.has("steal") and float(defn.hp) > 0.0:
+			var gain := dealt * float(spec.steal)
+			att.hp = minf(float(att.max_hp), float(att.hp) + gain)
+			af.set_health(float(att.hp) / float(att.max_hp))
+			ui.float_text(af.global_position + Vector3(0, 2.4, 0), "+%d" % int(gain), Color("4ade80"))
 	else:
 		df.dodge_react()
 		ui.float_text(df.global_position + Vector3(0, 2.2, 0), "¡Falló!", Color("e5e7eb"), 30)
@@ -1185,8 +1230,8 @@ func _on_swung() -> void:
 	Sfx.play("swing", rng.randf_range(0.9, 1.15))
 	if pending_crit:
 		pending_crit = false
-		_slowmo(0.22, 0.8)
-		cam_punch = 1.2
+		_slowmo(0.15, 1.1)
+		cam_punch = 2.0
 
 
 func _unhandled_input(event: InputEvent) -> void:

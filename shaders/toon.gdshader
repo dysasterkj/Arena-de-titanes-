@@ -44,9 +44,9 @@ void fragment() {
 
 void light() {
 	float ndl = dot(NORMAL, LIGHT);
-	float band = smoothstep(-0.05, 0.1, ndl) * 0.62 + smoothstep(0.5, 0.6, ndl) * 0.38;
-	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * band * 0.62;
+	float band = smoothstep(-0.1, 0.28, ndl) * 0.62 + smoothstep(0.3, 0.85, ndl) * 0.38;
+	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * band * 0.5;
 	vec3 h = normalize(LIGHT + VIEW);
 	float spec = pow(clamp(dot(NORMAL, h), 0.0, 1.0), 40.0);
-	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * step(0.5, spec) * shine * 0.5;
+	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * smoothstep(0.35, 0.8, spec) * shine * 0.3;
 }
