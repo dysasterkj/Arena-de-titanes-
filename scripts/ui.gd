@@ -185,7 +185,13 @@ func _bar(color: Color, w: float = 240.0, h: float = 16.0) -> ProgressBar:
 	return pb
 
 
+var preview_ov := {}
+
+
 func _show(id: String) -> void:
+	if id != "shop" and not preview_ov.is_empty():
+		preview_ov.clear()
+		preview_changed.emit()
 	for k in pages:
 		(pages[k] as Control).visible = (k == id)
 	page_changed.emit(id)
@@ -442,6 +448,7 @@ func _item_row(it: Dictionary) -> Control:
 			b = _btn("EQUIPAR", Color("0d9488"), 16, 120, 48)
 			b.pressed.connect(func():
 				GameState.equip(tab, id)
+				preview_ov.erase(tab)
 				preview_changed.emit()
 				open_shop())
 	else:
@@ -449,9 +456,18 @@ func _item_row(it: Dictionary) -> Control:
 		b.disabled = int(GameState.data.gold) < int(it.cost)
 		b.pressed.connect(func():
 			if GameState.buy_item(tab, id):
+				preview_ov.erase(tab)
 				Sfx.play("buy")
 				preview_changed.emit()
 				open_shop())
+	var eq_now := owned and GameState.equipped(tab) == id
+	if not eq_now:
+		var vb := _btn("VER", Color("1d4ed8") if preview_ov.get(tab, "") != id else Color("166534"), 15, 64, 48)
+		vb.pressed.connect(func():
+			preview_ov[tab] = id
+			preview_changed.emit()
+			open_shop())
+		row.add_child(vb)
 	row.add_child(b)
 	return row
 

@@ -140,7 +140,10 @@ func _yaw(from: Vector3, to: Vector3) -> float:
 func _refresh_preview() -> void:
 	if state != State.MENU:
 		return
-	pf.setup(GameState.player_fighter().look)
+	var lk: Dictionary = GameState.player_fighter().look
+	for k in ui.preview_ov:
+		lk[k] = ui.preview_ov[k]
+	pf.setup(lk)
 	pf.position = Vector3.ZERO
 	pf.rotation.y = PI * 0.82
 	ef.visible = false
