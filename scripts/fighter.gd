@@ -23,6 +23,7 @@ var kind := "human"
 var scl := 1.0
 var phase := 0.0
 
+const FOOT := 0.07
 const POSE_R := Vector2(0.7, 1.6)
 const POSE_L := Vector2(1.2, 1.5)
 
@@ -70,6 +71,7 @@ func setup(l: Dictionary) -> void:
 	var ww := float(l.get("fat", 1.0))
 	model = Node3D.new()
 	model.scale = Vector3(scl * ww, scl * hh, scl * ww)
+	model.position.y = FOOT
 	add_child(model)
 	var skin := _col(l.get("skin", "c68642"))
 	var cloth := _col(l.get("cloth", "1d4ed8"))
@@ -197,6 +199,7 @@ func setup(l: Dictionary) -> void:
 	dead = false
 	busy = false
 	guard = false
+	_collect_parts()
 
 
 # ---------- Piezas ----------
@@ -516,13 +519,23 @@ func _process(delta: float) -> void:
 		var s := sin(t * 15.0)
 		leg_l.rotation.x = s * 0.85
 		leg_r.rotation.x = -s * 0.85
-		model.position.y = absf(s) * 0.07
+		model.position.y = absf(s) * 0.07 + FOOT
+		if walking:
+			arm_l.rotation.x = POSE_L.x - s * 0.45
+			arm_r.rotation.x = POSE_R.x + s * 0.45
+		if s * _step_sign < 0.0:
+			_step_sign = -_step_sign
+			stepped.emit()
+		_dust_t -= delta
+		if _dust_t <= 0.0:
+			_dust_t = 0.11
+			_spawn_dust()
 	else:
 		var wob := sin(t * 3.0 + phase)
 		leg_l.rotation.x = lerpf(leg_l.rotation.x, -0.25 + wob * 0.07, 0.2)
 		leg_r.rotation.x = lerpf(leg_r.rotation.x, 0.3 - wob * 0.07, 0.2)
 	if not busy:
-		model.position.y = sin(t * 2.2 + phase) * 0.03
+		model.position.y = sin(t * 2.2 + phase) * 0.03 + FOOT
 		body.rotation.x = lerpf(body.rotation.x, sin(t * 2.2 + phase) * 0.03 + slouch, 0.2)
 		var tgt_l := Vector2(1.55, 1.55) if guard else POSE_L
 		arm_l.rotation.x = lerpf(arm_l.rotation.x, tgt_l.x + sin(t * 2.0 + phase) * 0.05, 0.15)
@@ -555,7 +568,7 @@ func attack(style: String, reach: float, on_strike: Callable) -> void:
 	var start := position
 	var fwd := -global_transform.basis.z
 	var lunge := start + fwd * reach
-	var tw := _tw()
+	var tw := _twb()
 	match style:
 		"high":
 			tw.tween_property(arm_r, "rotation:x", 3.1, 0.28)
@@ -578,8 +591,9 @@ func attack(style: String, reach: float, on_strike: Callable) -> void:
 			tw.tween_property(fore_r, "rotation:x", 0.4, 0.3)
 			tw.tween_property(model, "position:y", 0.45, 0.3)
 	await tw.finished
+	swung.emit()
 	moving = reach > 0.2
-	var tw2 := _tw()
+	var tw2 := _twe()
 	tw2.tween_property(self, "position", lunge, 0.2 if reach > 0.2 else 0.13)
 	match style:
 		"high":
@@ -597,11 +611,11 @@ func attack(style: String, reach: float, on_strike: Callable) -> void:
 		_:
 			tw2.tween_property(arm_r, "rotation:x", 0.2, 0.14)
 			tw2.tween_property(fore_r, "rotation:x", 0.1, 0.14)
-			tw2.tween_property(model, "position:y", 0.0, 0.14)
+			tw2.tween_property(model, "position:y", FOOT, 0.14)
 			tw2.tween_property(body, "rotation:x", 0.5, 0.14)
 	await get_tree().create_timer(0.1 if reach <= 0.2 else 0.2).timeout
 	on_strike.call()
-	await tw2.finished
+	await _wait(tw2)
 	moving = false
 	await get_tree().create_timer(0.12).timeout
 	model.rotation.y = 0.0
@@ -619,6 +633,7 @@ func hit_react(strong: bool = false) -> void:
 		return
 	busy = true
 	var back := global_transform.basis.z * (0.5 if strong else 0.3)
+	flash(Color("ffffff"), 0.08)
 	var start := position
 	var tw := _tw()
 	tw.tween_property(self, "position", start + back, 0.1)
@@ -686,7 +701,7 @@ func victory() -> void:
 		tw.tween_property(model, "position:y", 0.35, 0.2)
 		await tw.finished
 		var tw2 := _tw()
-		tw2.tween_property(model, "position:y", 0.0, 0.2)
+		tw2.tween_property(model, "position:y", FOOT, 0.2)
 		await tw2.finished
 
 
@@ -713,7 +728,7 @@ func pray() -> void:
 	await tw.finished
 	await get_tree().create_timer(0.4).timeout
 	var tw2 := _tw()
-	tw2.tween_property(model, "position:y", 0.0, 0.2)
+	tw2.tween_property(model, "position:y", FOOT, 0.2)
 	await tw2.finished
 	await _rest_pose(0.2)
 	busy = false
@@ -756,7 +771,7 @@ func _build_wounds() -> void:
 	]
 	for d in defs:
 		var col := blood_col if not (int(d[4]) == 2 and d[0] == head) else Color("4c1d95")
-		var n := Toon.part(d[0], Toon.box(d[1] * 1.7), col, d[2] + Vector3(0, 0, -0.008), d[3], false)
+		var n := Toon.part(d[0], Toon.box(d[1] * 1.25), col, d[2] + Vector3(0, 0, -0.008), d[3], false)
 		n.visible = false
 		wounds[int(d[4])].append(n)
 
@@ -799,16 +814,6 @@ func drop_weapon() -> void:
 		weapon_holder.visible = false
 
 
-func walk(to: Vector3, dur: float) -> void:
-	busy = true
-	moving = true
-	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(self, "position", to, dur)
-	await tw.finished
-	moving = false
-	busy = false
-
-
 func push_back(to: Vector3) -> void:
 	busy = true
 	moving = true
@@ -820,7 +825,7 @@ func push_back(to: Vector3) -> void:
 	moving = false
 	var tw2 := _tw()
 	tw2.tween_property(body, "rotation:x", 0.0, 0.25)
-	await tw2.finished
+	await _wait(tw2)
 	busy = false
 
 
@@ -873,7 +878,86 @@ func throw_anim(on_release: Callable) -> void:
 	tw2.tween_property(body, "rotation:x", 0.5, 0.12)
 	await get_tree().create_timer(0.07).timeout
 	on_release.call()
-	await tw2.finished
+	await _wait(tw2)
 	await get_tree().create_timer(0.2).timeout
 	await _rest_pose(0.2)
 	busy = false
+
+
+# ======================= Efectos de animación =======================
+signal swung
+signal stepped
+var toon_parts: Array = []
+var walking := false
+var _step_sign := 1.0
+var _dust_t := 0.0
+
+
+func _collect_parts() -> void:
+	toon_parts.clear()
+	var sh = Toon._toon_shader
+	var stack: Array = [model]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			stack.append(c)
+		if n is MeshInstance3D:
+			var mat = (n as MeshInstance3D).material_override
+			if mat is ShaderMaterial and (mat as ShaderMaterial).shader == sh:
+				toon_parts.append(n)
+
+
+func flash(color: Color = Color("ffffff"), dur: float = 0.09) -> void:
+	var saved: Array = []
+	for mi in toon_parts:
+		if is_instance_valid(mi):
+			saved.append((mi as MeshInstance3D).material_override)
+			(mi as MeshInstance3D).material_override = Toon.glow_mat(color)
+		else:
+			saved.append(null)
+	await get_tree().create_timer(dur).timeout
+	for i in toon_parts.size():
+		if is_instance_valid(toon_parts[i]) and saved[i] != null:
+			(toon_parts[i] as MeshInstance3D).material_override = saved[i]
+
+
+func _spawn_dust() -> void:
+	var par := get_parent()
+	if par == null:
+		return
+	var d := MeshInstance3D.new()
+	d.mesh = Toon.sphere(0.12)
+	d.material_override = Toon.glow_mat(Color(0.88, 0.78, 0.6), 0.55)
+	par.add_child(d)
+	d.global_position = global_position + Vector3(randf_range(-0.2, 0.2), 0.08, randf_range(-0.2, 0.2))
+	d.scale = Vector3.ONE * 0.5
+	var tw := create_tween()
+	tw.tween_property(d, "scale", Vector3.ONE * 1.8, 0.3)
+	tw.parallel().tween_property(d, "position:y", d.position.y + 0.35, 0.3)
+	tw.tween_property(d, "scale", Vector3.ZERO, 0.15)
+	tw.tween_callback(d.queue_free)
+
+
+func _twb() -> Tween:
+	return create_tween().set_parallel(true).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _twe() -> Tween:
+	return create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+
+
+func walk(to: Vector3, dur: float) -> void:
+	busy = true
+	moving = true
+	walking = true
+	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(self, "position", to, dur)
+	await tw.finished
+	moving = false
+	walking = false
+	busy = false
+
+
+func _wait(tw: Tween) -> void:
+	if tw != null and tw.is_running():
+		await tw.finished

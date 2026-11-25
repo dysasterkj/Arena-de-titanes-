@@ -44,6 +44,7 @@ var test_set := ""
 var test_level := 0
 var test_hurt := false
 var test_camz := 0.0
+var test_demo := ""
 var bot_wait := 0.0
 var wins_seen := 0
 
@@ -63,6 +64,8 @@ func _ready() -> void:
 			test_fight = int(a.substr(8))
 		elif a.begins_with("--camz="):
 			test_camz = float(a.substr(7))
+		elif a.begins_with("--demo="):
+			test_demo = a.substr(7)
 		elif a == "--hurt":
 			test_hurt = true
 		elif a.begins_with("--level="):
@@ -73,6 +76,7 @@ func _ready() -> void:
 			test_page = a.substr(7)
 	if autoplay:
 		Engine.time_scale = 4.0
+		base_time_scale = 4.0
 	if test_view != "":
 		view_style = test_view
 	if test_level > 0:
@@ -91,6 +95,9 @@ func _ready() -> void:
 	add_child(pf)
 	ef = FighterScript.new()
 	add_child(ef)
+	for fg in [pf, ef]:
+		fg.swung.connect(_on_swung)
+		fg.stepped.connect(func(): Sfx.play("step", rng.randf_range(0.9, 1.1), -6.0))
 	camera = Camera3D.new()
 	camera.fov = 56.0
 	camera.far = 200.0
@@ -171,11 +178,11 @@ func _update_camera(delta: float) -> void:
 		"battle":
 			if view_style == "side":
 				pos = Vector3((pf.position.x + ef.position.x) * 0.5, 2.1, test_camz if test_camz > 0.0 else 9.0)
-				camera.fov = lerpf(camera.fov, 58.0, 0.1)
+				camera.fov = lerpf(camera.fov, 58.0 - cam_punch * 6.0, 0.3)
 				look = Vector3((pf.position.x + ef.position.x) * 0.5, 0.62, 0)
 			else:
 				pos = Vector3(-4.4, 3.3, 8.6)
-				camera.fov = lerpf(camera.fov, 58.0, 0.1)
+				camera.fov = lerpf(camera.fov, 58.0 - cam_punch * 6.0, 0.3)
 				look = Vector3(0.7, 0.0, -0.8)
 	var vo := -1.75 if cam_mode == "shop" else (-0.5 if cam_mode == "battle" else 0.0)
 	camera.v_offset = lerpf(camera.v_offset, vo, 1.0 - exp(-5.0 * delta))
@@ -192,9 +199,19 @@ func _update_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	frame_count += 1
+	cam_punch = maxf(0.0, cam_punch - delta * 3.0)
+	if test_demo != "" and state == State.BATTLE and not busy and frame_count > 200:
+		var dm := test_demo
+		test_demo = ""
+		_on_action(dm)
+	if state == State.BATTLE:
+		cheer_level = move_toward(cheer_level, 1.0, delta * 0.7)
+		arena.set_cheer(cheer_level)
 	_update_camera(delta)
 	if state == State.MENU and cam_mode == "menu" and ui.pages["menu"].visible:
-		pf.rotation.y += delta * 0.25
+		drag_idle = maxf(0.0, drag_idle - delta)
+		if drag_idle <= 0.0:
+			pf.rotation.y += delta * 0.25
 	if autoplay:
 		_bot(delta)
 	if shot_path != "" and frame_count == shot_frame:
@@ -214,7 +231,12 @@ const NEAR_GAP := 1.5
 
 var near := false
 var debris: Array = []
-var base_scale := 1.0
+var base_time_scale := 1.0
+var pending_crit := false
+var drag_idle := 0.0
+var slowmo_id := 0
+var cam_punch := 0.0
+var cheer_level := 1.0
 
 
 func _clear_debris() -> void:
@@ -262,13 +284,21 @@ func _start_fight(i: int) -> void:
 	ef.setup(e.look)
 	ef.visible = true
 	_layout()
+	var home_p: Vector3 = pf.position
+	var home_e: Vector3 = ef.position
+	pf.position = Vector3(-6.5, 0, 0)
+	ef.position = Vector3(6.5, 0, 0)
+	pf.walk(home_p, 1.2)
+	ef.walk(home_e, 1.2)
 	cam_mode = "battle"
 	ui.show_battle()
 	ui.hide_actions()
 	_refresh()
 	ui.set_log("¡%s te desafía!" % e.name)
-	Sfx.play("zone")
+	Sfx.play("crowd")
 	await get_tree().create_timer(1.3).timeout
+	ui.banner("¡PELEA!")
+	Sfx.play("crowd")
 	if test_hurt:
 		pf.position = Vector3(-0.85, 0, 0)
 		ef.position = Vector3(0.85, 0, 0)
@@ -363,6 +393,8 @@ func _player_turn() -> void:
 		await _enemy_turn()
 		return
 	busy = false
+	if OS.has_feature("editor") or autoplay or test_demo != "":
+		print("[test] turno del jugador, gap=%.2f" % _gap())
 	ui.set_log("Tu turno" + (" · estás cerca" if _gap() <= NEAR_GAP + 0.6 else " · estás lejos"))
 	ui.show_actions(_player_actions())
 
@@ -378,7 +410,7 @@ func _on_action(id: String) -> void:
 		pf.guard = true
 		p.en = minf(float(p.max_en), float(p.en) + 8.0)
 		ui.set_log("Te cubres con el escudo")
-		Sfx.play("shield")
+		Sfx.play("block")
 		_refresh()
 		await get_tree().create_timer(0.7).timeout
 	elif id == "move":
@@ -419,7 +451,7 @@ func _potion(kind: String) -> void:
 	if not GameState.use_potion(kind):
 		return
 	pf.drink()
-	Sfx.play("power")
+	Sfx.play("potion")
 	await get_tree().create_timer(0.5).timeout
 	if kind == "vida":
 		var h := float(p.max_hp) * 0.5
@@ -447,7 +479,7 @@ func _skill(id: String) -> bool:
 	if s.has("heal"):
 		p.en = float(p.en) - float(s.en)
 		pf.pray()
-		Sfx.play("power")
+		Sfx.play("heal")
 		await get_tree().create_timer(0.5).timeout
 		var h := float(p.max_hp) * float(s.heal)
 		p.hp = minf(float(p.max_hp), float(p.hp) + h)
@@ -467,15 +499,16 @@ func _skill(id: String) -> bool:
 func _apply_damage(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, dmg_in: float, o: Dictionary) -> void:
 	var near_melee: bool = bool(o.get("near_melee", false))
 	var zone := String(o.get("zone", ""))
-	var crit := not bool(o.get("no_crit", false)) and rng.randf() < _crit_chance(att, near_melee, zone)
+	var crit: bool = bool(o["force_crit"]) if o.has("force_crit") else (not bool(o.get("no_crit", false)) and rng.randf() < _crit_chance(att, near_melee, zone))
 	var dmg := dmg_in
 	if crit:
 		dmg *= 1.5 + (0.3 if near_melee else 0.0)
 		if bool(att.is_player):
 			GameState.bump("crits")
-		base_scale = Engine.time_scale
-		Engine.time_scale = base_scale * 0.25
-		get_tree().create_timer(0.16, true, false, true).timeout.connect(func(): Engine.time_scale = base_scale)
+		Sfx.play("crit")
+		Sfx.play("crowd_oh", 1.0, -4.0)
+		if not o.has("force_crit"):
+			_slowmo(0.3, 0.5)
 	var d := maxi(1, int(round(dmg)))
 	if int(att.get("weak", 0)) > 0:
 		d = maxi(1, int(d * 0.65))
@@ -497,19 +530,25 @@ func _apply_damage(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, dm
 				if piece:
 					debris.append(piece)
 				ui.float_text(hit_pos + Vector3(0, 0.6, 0), "¡ESCUDO ROTO!", Color("fbbf24"), 30)
-				Sfx.play("over", 1.6, -6.0)
+				Sfx.play("break")
 		else:
 			d = maxi(1, int(d * 0.7))
 		defn.guard = false
 		df.guard = false
 		if not bool(o.get("no_react", false)):
 			df.block_react()
-		Sfx.play("shield", 0.9 + rng.randf() * 0.2)
+		Sfx.play("block", 0.9 + rng.randf() * 0.2)
 	else:
 		if not bool(o.get("no_react", false)):
 			df.hit_react(bool(o.get("strong", false)) or crit)
-		Sfx.play("hit", 0.9 + rng.randf() * 0.2)
+		_hit_sfx(df)
 	defn.hp = float(defn.hp) - d
+	_impact(df.global_position + Vector3(0, 1.3 * df.scl, 0), Color("93c5fd") if blocked else Color("fde68a"), crit)
+	cam_punch = maxf(cam_punch, 1.0 if crit else 0.45)
+	_cheer(2.2 if crit else 1.5)
+	if float(defn.hp) <= 0.0:
+		_slowmo(0.18, 1.6)
+		cam_punch = 2.2
 	df.set_health(maxf(0.0, float(defn.hp)) / float(defn.max_hp))
 	if not shield_ok:
 		_blood(df, _dir_to(af, df), d, crit, zone)
@@ -585,12 +624,18 @@ func _melee(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dic
 	var reach := maxf(0.0, _gap() - NEAR_GAP)
 	var acc := float(spec.acc) - (0.1 if far else 0.0)
 	var zone := String(spec.get("zone", "body"))
+	var will_hit := rng.randf() < _chance(att, defn, acc, String(spec.anim))
+	var will_crit := will_hit and rng.randf() < _crit_chance(att, not far, zone)
+	pending_crit = will_crit
 	await af.attack(String(spec.anim), reach, func():
-		if rng.randf() < _chance(att, defn, acc, String(spec.anim)):
-			_apply_damage(att, defn, af, df, _raw_damage(att, float(spec.mult)), {"near_melee": not far, "zone": zone, "strong": float(spec.mult) >= 1.5, "stun": int(spec.get("stun", 0))})
+		_slash(af, String(spec.anim))
+		if autoplay:
+			print("[test] strike af=%.2f df=%.2f reach=%.2f" % [af.position.x, df.position.x, reach])
+		if will_hit:
+			_apply_damage(att, defn, af, df, _raw_damage(att, float(spec.mult)), {"near_melee": not far, "zone": zone, "strong": float(spec.mult) >= 1.5, "stun": int(spec.get("stun", 0)), "force_crit": will_crit})
 		else:
 			df.dodge_react()
-			Sfx.play("jump", 1.3, -4.0)
+			Sfx.play("swing", 1.5, -10.0)
 			ui.float_text(df.global_position + Vector3(0, 2.2, 0), "¡Falló!", Color("e5e7eb"), 30))
 	return await _check_ko(att, defn, df)
 
@@ -610,6 +655,7 @@ func _push(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D) -> bool:
 	await af.attack("mid", 0.0, func():
 		_apply_damage(att, defn, af, df, _raw_damage(att, 0.25), {"no_crit": true, "no_react": true, "unblockable": true})
 		defn.weak = 1
+		Sfx.play("push")
 		defn.en = maxf(0.0, float(defn.en) - 5.0)
 		var tx := clampf(af.position.x + _dir_to(af, df) * FAR_GAP, -5.5, 5.5)
 		df.push_back(Vector3(tx, 0, 0))
@@ -641,9 +687,10 @@ func _throw(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D) -> bool:
 		tw.tween_property(w, "rotation:z", -_dir_to(af, df) * TAU * 2.5, dur)
 		debris.append(w)
 		flight.append(tw)
-		Sfx.play("jump", 0.7))
+		Sfx.play("throw"))
 	if flight.size() > 0:
-		await (flight[0] as Tween).finished
+		if (flight[0] as Tween).is_running():
+			await (flight[0] as Tween).finished
 	att.wdmg = 3
 	att.wacc = -0.06
 	if hit:
@@ -660,7 +707,7 @@ func _cast(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dict
 	ui.set_log("¡%s lanza %s!" % ["Tú" if bool(att.is_player) else String(att.name), String(spec.name)])
 	var col := Color(String(spec.get("color", "f97316")))
 	var from: Vector3 = await af.cast_start(col)
-	Sfx.play("power", 1.3)
+	Sfx.play("fire")
 	var ball := Node3D.new()
 	Toon.glow(ball, Toon.sphere(0.22), col.lightened(0.5))
 	Toon.glow(ball, Toon.sphere(0.42), col, Vector3.ZERO, Vector3.ZERO, 0.45)
@@ -671,9 +718,16 @@ func _cast(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dict
 	var target := df.global_position + Vector3(0, 1.2 * df.scl, 0)
 	var dur := clampf(from.distance_to(target) / 12.0, 0.3, 0.7)
 	var tw := create_tween()
-	tw.tween_property(ball, "global_position", target, dur)
+	tw.tween_method(func(tt: float):
+		ball.global_position = from.lerp(target, tt / dur)
+		if rng.randf() < 0.8:
+			_trail(ball.global_position, col), 0.0, dur, dur)
 	await tw.finished
 	ball.queue_free()
+	Sfx.play("boom")
+	_impact(target, col, true)
+	_cheer(2.0)
+	cam_punch = 1.0
 	for i in 10:
 		var sp := MeshInstance3D.new()
 		sp.mesh = BoxMesh.new()
@@ -721,7 +775,7 @@ func _enemy_turn() -> void:
 	if boss and hp_ratio < 0.3 and not enemy_potion:
 		enemy_potion = true
 		ef.drink()
-		Sfx.play("power")
+		Sfx.play("potion")
 		await get_tree().create_timer(0.6).timeout
 		var h := float(e.max_hp) * 0.35
 		e.hp = minf(float(e.max_hp), float(e.hp) + h)
@@ -781,6 +835,8 @@ func _end_fight(win: bool, surrender: bool = false) -> void:
 	busy = true
 	ui.hide_actions()
 	arena.set_cheer(2.0 if win else 0.4)
+	Sfx.play("die")
+	ui.banner("¡K.O.!", Color("ef4444"))
 	var lines: Array = []
 	if win:
 		ef.die()
@@ -805,13 +861,16 @@ func _end_fight(win: bool, surrender: bool = false) -> void:
 	else:
 		if not surrender:
 			pf.die()
-		Sfx.play("over")
+		Sfx.play("lose")
 		ui.set_log("Has caído..." if not surrender else "Te rindes", Color("f87171"))
 		GameState.register_loss()
 		lines.append("Perdiste contra %s" % e.name)
 		lines.append("Consuelo: +12 de oro")
 		lines.append("Entrena, compra mejor equipo y vuelve.")
 	lines.append_array(GameState.new_achievements())
+	for ln2 in lines:
+		if String(ln2).begins_with("¡NIVEL"):
+			Sfx.play("levelup")
 	await get_tree().create_timer(1.8).timeout
 	ui.show_result(win, "¡VICTORIA!" if win else "DERROTA", lines, not (win and fight_idx + 1 >= GameState.ENEMIES.size()))
 
@@ -1030,3 +1089,109 @@ func _install_uri(uri) -> void:
 	intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)
 	activity.startActivity(intent)
 	ui.set_update_status("Listo: confirma la instalación")
+
+
+# ======================= Efectos visuales y sonoros =======================
+func _hit_sfx(df: Node3D) -> void:
+	var metal := String(df.kind) in ["knight", "titan"] or String(df.look.get("armor", "none")) != "none" or String(df.look.get("helmet", "none")) in ["hierro", "oro"]
+	Sfx.play("hit_metal" if metal else "hit", 0.92 + rng.randf() * 0.16)
+
+
+func _cheer(v: float) -> void:
+	cheer_level = maxf(cheer_level, v)
+
+
+func _slash(af: Node3D, style: String) -> void:
+	var m := MeshInstance3D.new()
+	m.mesh = Toon.crescent(1.15, 0.24, 2.3)
+	m.material_override = Toon.glow_mat(Color("ffffff"), 0.9)
+	add_child(m)
+	var dirx := -af.global_transform.basis.z.x
+	var s := 1.0 if dirx >= 0.0 else -1.0
+	var h: float = 1.45 * float(af.scl)
+	var rot := 0.0
+	match style:
+		"high":
+			rot = 1.05
+			h = 1.7 * float(af.scl)
+		"low":
+			rot = -0.8
+			h = 0.85 * float(af.scl)
+		"spin":
+			rot = 0.0
+		"power":
+			rot = 0.6
+	m.global_position = af.global_position + Vector3(s * 0.95, h, 0.15)
+	m.rotation.z = rot * s
+	m.scale = Vector3(s * 0.45, 0.45, 1.0)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(m, "scale", Vector3(s * 0.95, 0.95, 1.0), 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_property(m, "scale", Vector3(s * 0.1, 0.1, 1.0), 0.12)
+	tw.chain().tween_callback(m.queue_free)
+
+
+func _impact(pos: Vector3, col: Color, big: bool = false) -> void:
+	var n := 13 if big else 7
+	for i in n:
+		var ray := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.06, 0.4 if big else 0.28, 0.04)
+		ray.mesh = bm
+		ray.material_override = Toon.glow_mat(col if i % 2 == 0 else Color.WHITE)
+		add_child(ray)
+		var a := TAU * float(i) / n + rng.randf() * 0.3
+		ray.global_position = pos
+		ray.rotation.z = a - PI / 2.0
+		var dist := rng.randf_range(0.45, 0.9) * (1.6 if big else 1.0)
+		var tw := create_tween().set_parallel(true)
+		tw.tween_property(ray, "global_position", pos + Vector3(cos(a) * dist, sin(a) * dist, 0), 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(ray, "scale", Vector3(0.2, 0.1, 1.0), 0.22)
+		tw.chain().tween_callback(ray.queue_free)
+	var flash := MeshInstance3D.new()
+	flash.mesh = Toon.sphere(0.35)
+	flash.material_override = Toon.glow_mat(Color.WHITE, 0.8)
+	add_child(flash)
+	flash.global_position = pos
+	var tw2 := create_tween()
+	tw2.tween_property(flash, "scale", Vector3.ONE * (2.4 if big else 1.6), 0.1)
+	tw2.tween_property(flash, "scale", Vector3.ZERO, 0.1)
+	tw2.tween_callback(flash.queue_free)
+
+
+func _trail(pos: Vector3, col: Color) -> void:
+	var sp := MeshInstance3D.new()
+	sp.mesh = Toon.sphere(0.13)
+	sp.material_override = Toon.glow_mat(col, 0.7)
+	add_child(sp)
+	sp.global_position = pos + Vector3(rng.randf_range(-0.08, 0.08), rng.randf_range(-0.08, 0.08), 0)
+	var tw := create_tween()
+	tw.tween_property(sp, "scale", Vector3.ZERO, 0.28)
+	tw.tween_callback(sp.queue_free)
+
+
+func _slowmo(scale: float, real_sec: float) -> void:
+	slowmo_id += 1
+	var my_id := slowmo_id
+	Engine.time_scale = base_time_scale * scale
+	get_tree().create_timer(real_sec, true, false, true).timeout.connect(func():
+		if my_id == slowmo_id:
+			Engine.time_scale = base_time_scale)
+
+
+func _on_swung() -> void:
+	Sfx.play("swing", rng.randf_range(0.9, 1.15))
+	if pending_crit:
+		pending_crit = false
+		_slowmo(0.22, 0.8)
+		cam_punch = 1.2
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if state != State.MENU or cam_mode == "none":
+		return
+	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		pf.rotation.y += event.relative.x * 0.012
+		drag_idle = 3.0
+	elif event is InputEventScreenDrag:
+		pf.rotation.y += event.relative.x * 0.012
+		drag_idle = 3.0

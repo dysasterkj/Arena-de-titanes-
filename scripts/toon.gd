@@ -143,3 +143,21 @@ static func horseshoe(parent: Node3D, s: float = 1.0, pos: Vector3 = Vector3.ZER
 		part(n, box(Vector3(0.2, 0.3, 0.2)), Color("e11d2e"), Vector3(sx, -0.15, 0))
 		part(n, box(Vector3(0.21, 0.12, 0.21)), Color("f1f5f9"), Vector3(sx, -0.36, 0))
 	return n
+
+
+## Media luna en el plano XY (centro hacia +X): sirve para estelas de espada.
+static func crescent(radius: float, thick: float, arc: float, segs: int = 18) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in segs:
+		var a0 := -arc * 0.5 + arc * float(i) / segs
+		var a1 := -arc * 0.5 + arc * float(i + 1) / segs
+		var t0 := sin(PI * float(i) / segs)
+		var t1 := sin(PI * float(i + 1) / segs)
+		var o0 := Vector3(cos(a0), sin(a0), 0) * radius
+		var o1 := Vector3(cos(a1), sin(a1), 0) * radius
+		var i0 := Vector3(cos(a0), sin(a0), 0) * (radius - thick * t0)
+		var i1 := Vector3(cos(a1), sin(a1), 0) * (radius - thick * t1)
+		for v in [o0, o1, i0, i0, o1, i1]:
+			st.add_vertex(v)
+	return st.commit()

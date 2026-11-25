@@ -33,21 +33,24 @@ const CROWD_PALETTES := [
 const HAIRS := [Color("1a1a1a"), Color("3b2314"), Color("6b4423"), Color("d6a85c"), Color("a33b20"), Color("9ca3af"), Color("94a3b8"), Color("cd7f32"), Color("fbbf24")]
 
 
-func _noise_tex(freq: float, cellular: bool) -> NoiseTexture2D:
+func _noise_tex(freq: float, cellular: bool, octaves: int = 4) -> NoiseTexture2D:
 	var n := FastNoiseLite.new()
 	n.noise_type = FastNoiseLite.TYPE_CELLULAR if cellular else FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	n.frequency = freq
 	if cellular:
 		n.cellular_return_type = FastNoiseLite.RETURN_DISTANCE2_SUB
+	else:
+		n.fractal_type = FastNoiseLite.FRACTAL_FBM
+		n.fractal_octaves = octaves
 	var tex := NoiseTexture2D.new()
 	tex.noise = n
-	tex.width = 256
-	tex.height = 256
+	tex.width = 512
+	tex.height = 512
 	tex.seamless = true
 	return tex
 
 
-func _mat(tex: Texture2D = null, mix_amt: float = 0.0, scale: float = 0.25) -> ShaderMaterial:
+func _mat(tex: Texture2D = null, mix_amt: float = 0.0, scale: float = 0.25, tex2: Texture2D = null, dmix: float = 0.0, dscale: float = 1.0) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/toon.gdshader")
 	m.set_shader_parameter("shine", 0.0)
@@ -56,6 +59,10 @@ func _mat(tex: Texture2D = null, mix_amt: float = 0.0, scale: float = 0.25) -> S
 		m.set_shader_parameter("tex", tex)
 		m.set_shader_parameter("tex_mix", mix_amt)
 		m.set_shader_parameter("tex_scale", scale)
+	if tex2:
+		m.set_shader_parameter("tex2", tex2)
+		m.set_shader_parameter("detail_mix", dmix)
+		m.set_shader_parameter("detail_scale", dscale)
 	return m
 
 
@@ -75,10 +82,12 @@ func _box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot_y: flo
 func _ready() -> void:
 	rng.seed = 77
 	_build_environment()
-	sand_mat = _mat(_noise_tex(0.035, false), 0.55, 0.12)
-	wall_mat = _mat(_noise_tex(0.05, true), 0.65, 0.3)
-	stand_mat = _mat(_noise_tex(0.06, true), 0.5, 0.3)
+	sand_mat = _mat(_noise_tex(0.012, false, 5), 0.45, 0.07, _noise_tex(0.09, false, 3), 0.4, 6.0)
+	wall_mat = _mat(_noise_tex(0.07, true), 0.55, 0.32, _noise_tex(0.12, false, 3), 0.35, 5.0)
+	stand_mat = _mat(_noise_tex(0.07, true), 0.45, 0.3, _noise_tex(0.1, false, 3), 0.3, 4.0)
 	banner_mat = _mat()
+	for m2 in [sand_mat, wall_mat, stand_mat, banner_mat]:
+		m2.set_shader_parameter("ground_ao", 0.0)
 
 	var floor_mi := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()

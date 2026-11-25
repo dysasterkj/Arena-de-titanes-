@@ -1,8 +1,8 @@
 extends Node
 ## Sonido: efectos y música (wav de audio/).
 
-const SFX_NAMES := ["jump", "hit", "power", "coin", "win", "over", "click", "buy", "shield", "zone"]
-const MUSIC := {"menu": "music_menu", "battle": "music_1", "arena": "music_2"}
+const SFX_NAMES := ["swing", "hit", "hit_metal", "block", "break", "crit", "step", "push", "charge", "fire", "boom", "potion", "heal", "throw", "die", "win", "lose", "levelup", "crowd", "crowd_oh", "click", "buy", "coin"]
+const MUSIC := {"menu": "music_menu", "battle": "music_battle"}
 
 var sfx: Dictionary = {}
 var music: Dictionary = {}

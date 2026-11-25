@@ -928,3 +928,21 @@ func open_ach() -> void:
 	ach_box.add_child(sc)
 	_back_row(ach_box)
 	_show("ach")
+
+
+## Cartel grande que aparece con efecto de rebote (¡PELEA!, ¡K.O.!).
+func banner(text: String, color: Color = C_GOLD) -> void:
+	var l := _lbl(text, 76, color, HORIZONTAL_ALIGNMENT_CENTER)
+	l.add_theme_constant_override("outline_size", 14)
+	l.add_theme_color_override("font_outline_color", Color("2a0f05"))
+	float_layer.add_child(l)
+	_place(l, 0, H * 0.28, W, 100)
+	l.pivot_offset = Vector2(W * 0.5, 50)
+	l.scale = Vector2(2.6, 2.6)
+	l.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(l, "modulate:a", 1.0, 0.08)
+	tw.parallel().tween_property(l, "scale", Vector2.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.7)
+	tw.tween_property(l, "modulate:a", 0.0, 0.35)
+	tw.tween_callback(l.queue_free)
