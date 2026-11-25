@@ -4,13 +4,14 @@ extends Node3D
 const ArenaScript = preload("res://scripts/arena.gd")
 const FighterScript = preload("res://scripts/fighter.gd")
 const UiScript = preload("res://scripts/ui.gd")
+const Toon = preload("res://scripts/toon.gd")
 
 enum State { MENU, BATTLE, RESULT }
 
 const ACT := {
-	"fast": {"label": "RÁPIDO", "hint": "golpe bajo", "cost": 4, "mult": 0.8, "acc": 0.15, "anim": "low"},
-	"mid": {"label": "MEDIO", "hint": "golpe central", "cost": 6, "mult": 1.0, "acc": 0.0, "anim": "mid"},
-	"strong": {"label": "FUERTE", "hint": "golpe alto", "cost": 11, "mult": 1.6, "acc": -0.2, "anim": "high"},
+	"head": {"label": "CABEZA", "cost": 10, "mult": 1.5, "acc": -0.18, "anim": "high", "zone": "head"},
+	"body": {"label": "CUERPO", "cost": 6, "mult": 1.0, "acc": 0.0, "anim": "mid", "zone": "body"},
+	"legs": {"label": "PIERNAS", "cost": 4, "mult": 0.75, "acc": 0.14, "anim": "low", "zone": "legs"},
 }
 
 var state := State.MENU
@@ -40,6 +41,9 @@ var test_view := ""
 var test_fight := -1
 var test_page := ""
 var test_set := ""
+var test_level := 0
+var test_hurt := false
+var test_camz := 0.0
 var bot_wait := 0.0
 var wins_seen := 0
 
@@ -57,6 +61,12 @@ func _ready() -> void:
 			test_view = a.substr(7)
 		elif a.begins_with("--fight="):
 			test_fight = int(a.substr(8))
+		elif a.begins_with("--camz="):
+			test_camz = float(a.substr(7))
+		elif a == "--hurt":
+			test_hurt = true
+		elif a.begins_with("--level="):
+			test_level = int(a.substr(8))
 		elif a.begins_with("--set="):
 			test_set = a.substr(6)
 		elif a.begins_with("--page="):
@@ -65,6 +75,8 @@ func _ready() -> void:
 		Engine.time_scale = 4.0
 	if test_view != "":
 		view_style = test_view
+	if test_level > 0:
+		GameState.data.xp = GameState.xp_total_for(test_level)
 	for pair in test_set.split(","):
 		var kv := pair.split(":")
 		if kv.size() != 2:
@@ -118,18 +130,6 @@ func _yaw(from: Vector3, to: Vector3) -> float:
 	return atan2(-d.x, -d.z)
 
 
-func _layout() -> void:
-	var pp := Vector3(-1.9, 0, 2.2)
-	var ep := Vector3(1.9, 0, -2.2)
-	if view_style == "side":
-		pp = Vector3(-1.75, 0, 0)
-		ep = Vector3(1.75, 0, 0)
-	pf.position = pp
-	ef.position = ep
-	pf.rotation.y = _yaw(pp, ep)
-	ef.rotation.y = _yaw(ep, pp)
-
-
 func _refresh_preview() -> void:
 	if state != State.MENU:
 		return
@@ -170,14 +170,14 @@ func _update_camera(delta: float) -> void:
 			look = Vector3(0, 0.35, 0)
 		"battle":
 			if view_style == "side":
-				pos = Vector3(0, 2.0, 7.7)
-				camera.fov = lerpf(camera.fov, 56.0, 0.1)
-				look = Vector3(0, 0.62, 0)
+				pos = Vector3((pf.position.x + ef.position.x) * 0.5, 2.1, test_camz if test_camz > 0.0 else 9.0)
+				camera.fov = lerpf(camera.fov, 58.0, 0.1)
+				look = Vector3((pf.position.x + ef.position.x) * 0.5, 0.62, 0)
 			else:
 				pos = Vector3(-4.4, 3.3, 8.6)
-				camera.fov = lerpf(camera.fov, 56.0, 0.1)
+				camera.fov = lerpf(camera.fov, 58.0, 0.1)
 				look = Vector3(0.7, 0.0, -0.8)
-	var vo := -1.75 if cam_mode == "shop" else 0.0
+	var vo := -1.75 if cam_mode == "shop" else (-0.5 if cam_mode == "battle" else 0.0)
 	camera.v_offset = lerpf(camera.v_offset, vo, 1.0 - exp(-5.0 * delta))
 	var k := 1.0 - exp(-4.0 * delta)
 	cam_pos = cam_pos.lerp(pos, k)
@@ -209,20 +209,51 @@ func _take_shot() -> void:
 
 
 # ---------- Combate ----------
+const FAR_GAP := 3.8
+const NEAR_GAP := 1.5
+
+var near := false
+var debris: Array = []
+var base_scale := 1.0
+
+
+func _clear_debris() -> void:
+	for n in debris:
+		if is_instance_valid(n):
+			(n as Node).queue_free()
+	debris.clear()
+
+
+func _gap() -> float:
+	return absf(ef.position.x - pf.position.x)
+
+
+func _dir_to(from: Node3D, to: Node3D) -> float:
+	return signf(to.position.x - from.position.x)
+
+
 func _start_fight(i: int) -> void:
 	fight_idx = i
 	state = State.BATTLE
 	busy = true
+	_clear_debris()
+	near = false
 	p = GameState.player_fighter()
 	p.hp = float(p.max_hp)
 	p.en = float(p.max_en)
 	p.guard = false
 	p.stun = 0
+	p.limp = 0
+	p.weak = 0
+	p.shield_hp = float(p.shield_max)
 	e = GameState.enemy_fighter(i)
 	e.hp = float(e.max_hp)
 	e.en = float(e.max_en)
 	e.guard = false
 	e.stun = 0
+	e.limp = 0
+	e.weak = 0
+	e.shield_hp = float(e.shield_max)
 	enemy_potion = false
 	arena.set_theme(int(GameState.ENEMIES[i].arena))
 	arena.set_cheer(1.0)
@@ -238,8 +269,28 @@ func _start_fight(i: int) -> void:
 	ui.set_log("¡%s te desafía!" % e.name)
 	Sfx.play("zone")
 	await get_tree().create_timer(1.3).timeout
+	if test_hurt:
+		pf.position = Vector3(-0.85, 0, 0)
+		ef.position = Vector3(0.85, 0, 0)
+		pf.set_health(0.2)
+		pf.set_shield(0.3)
+		ef.set_health(0.4)
+		for k in 4:
+			_blood(ef, 1.0, 20, true, "body")
+			_blood(pf, -1.0, 12, false, "head")
+		p.guard = true
+		pf.guard = true
 	busy = false
 	_player_turn()
+
+
+func _layout() -> void:
+	var pp := Vector3(-FAR_GAP * 0.5, 0, 0)
+	var ep := Vector3(FAR_GAP * 0.5, 0, 0)
+	pf.position = pp
+	ef.position = ep
+	pf.rotation.y = _yaw(pp, ep)
+	ef.rotation.y = _yaw(ep, pp)
 
 
 func _refresh() -> void:
@@ -252,33 +303,48 @@ func _chance(att: Dictionary, defn: Dictionary, acc: float, anim: String = "") -
 		extra = float(att.get("acc_high", 0.0))
 	elif anim == "low":
 		extra = float(att.get("acc_low", 0.0))
+	if int(att.get("limp", 0)) > 0:
+		extra -= 0.08
 	var c := 0.72 + acc + extra + float(att.wacc) + (float(att.agi) - float(defn.agi)) * 0.02 + float(defn.get("evade", 0.0))
 	return clampf(c, 0.12, 0.95)
 
 
-func _damage(att: Dictionary, defn: Dictionary, mult: float) -> int:
-	var raw := (float(att.wdmg) + float(att.fue) * 1.5) * mult * rng.randf_range(0.9, 1.1)
-	return maxi(1, int(round(raw - float(defn.def) * 0.55)))
+func _raw_damage(att: Dictionary, mult: float) -> float:
+	return (float(att.wdmg) + float(att.fue) * 1.5) * mult * rng.randf_range(0.9, 1.1)
+
+
+func _crit_chance(att: Dictionary, near_melee: bool, zone: String) -> float:
+	return 0.06 + (0.14 if near_melee else 0.0) + (0.06 if zone == "head" else 0.0) + float(att.fue) * 0.003
 
 
 func _player_actions() -> Dictionary:
 	var main: Array = []
-	for id in ["fast", "mid", "strong"]:
+	var far := _gap() > NEAR_GAP + 0.6
+	for id in ["head", "body", "legs"]:
 		var a: Dictionary = ACT[id]
-		var ch := int(round(_chance(p, e, float(a.acc), String(a.anim)) * 100.0))
-		main.append({"id": id, "label": a.label, "sub": "%d EN · %d%%" % [int(a.cost), ch], "enabled": float(p.en) >= float(a.cost)})
-	main.append({"id": "guard", "label": "DEFENDER", "sub": "+8 EN · bloquea", "enabled": true})
+		var ch := int(round(_chance(p, e, float(a.acc) - (0.1 if far else 0.0), String(a.anim)) * 100.0))
+		var cr := int(round(_crit_chance(p, not far, String(a.zone)) * 100.0))
+		main.append({"id": id, "label": a.label, "sub": "%d EN · %d%% · crít %d%%" % [int(a.cost), ch, cr], "enabled": float(p.en) >= float(a.cost), "icon": id})
+	main.append({"id": "guard", "label": "DEFENDER", "sub": "+8 EN · escudo %d%%" % int(100.0 * float(p.shield_hp) / maxf(1.0, float(p.shield_max))) if float(p.shield_max) > 0.0 else "+8 EN · sin escudo", "enabled": true, "icon": "guard"})
+	main.append({"id": "push", "label": "EMPUJAR", "sub": "6 EN · solo cerca", "enabled": not far and float(p.en) >= 6.0, "icon": "push"})
+	if far:
+		main.append({"id": "move", "label": "ACERCARSE", "sub": "3 EN · más críticos", "enabled": float(p.en) >= 3.0, "icon": "approach"})
+	else:
+		main.append({"id": "move", "label": "ALEJARSE", "sub": "2 EN · tiro a distancia", "enabled": float(p.en) >= 2.0, "icon": "retreat"})
+	main.append({"id": "throw", "label": "LANZAR ARMA", "sub": "8 EN · pierdes el arma" if bool(p.armed) else "sin arma", "enabled": bool(p.armed) and float(p.en) >= 8.0, "icon": "throw"})
 	var skills: Array = []
 	for s in GameState.unlocked_skills():
 		var sub := "%d EN" % int(s.en)
-		if s.has("mult"):
+		if s.has("mult") or s.has("mag"):
 			sub += " · %d%%" % int(round(_chance(p, e, float(s.acc)) * 100.0))
-		skills.append({"id": "skill:" + String(s.id), "label": String(s.name), "sub": sub + " · " + String(s.desc), "enabled": float(p.en) >= float(s.en)})
+		if bool(s.get("ranged", false)):
+			sub += " · a distancia"
+		skills.append({"id": "skill:" + String(s.id), "label": String(s.name), "sub": sub, "enabled": float(p.en) >= float(s.en), "icon": "spell" if bool(s.get("ranged", false)) else ("heal" if s.has("heal") else "power")})
 	var pots: Array = [
-		{"id": "potion:vida", "label": "Poción de vida (x%d)" % GameState.potion_count("vida"), "sub": "+50% vida", "enabled": GameState.potion_count("vida") > 0},
-		{"id": "potion:energia", "label": "Poción de energía (x%d)" % GameState.potion_count("energia"), "sub": "+60% energía", "enabled": GameState.potion_count("energia") > 0},
+		{"id": "potion:vida", "label": "Poción de vida (x%d)" % GameState.potion_count("vida"), "sub": "+50% vida", "enabled": GameState.potion_count("vida") > 0, "icon": "potion_hp"},
+		{"id": "potion:energia", "label": "Poción de energía (x%d)" % GameState.potion_count("energia"), "sub": "+60% energía", "enabled": GameState.potion_count("energia") > 0, "icon": "potion_en"},
 	]
-	return {"main": main, "skills": skills, "potions": pots}
+	return {"main": main, "skills": skills, "potions": pots, "near": not far}
 
 
 func _player_turn() -> void:
@@ -287,6 +353,7 @@ func _player_turn() -> void:
 	p.en = minf(float(p.max_en), float(p.en) + maxf(1.0, 3.0 + float(p.regen)))
 	p.guard = false
 	pf.guard = false
+	p.limp = maxi(0, int(p.limp) - 1)
 	_refresh()
 	if int(p.stun) > 0:
 		p.stun = int(p.stun) - 1
@@ -296,7 +363,7 @@ func _player_turn() -> void:
 		await _enemy_turn()
 		return
 	busy = false
-	ui.set_log("Tu turno: elige una acción")
+	ui.set_log("Tu turno" + (" · estás cerca" if _gap() <= NEAR_GAP + 0.6 else " · estás lejos"))
 	ui.show_actions(_player_actions())
 
 
@@ -314,15 +381,37 @@ func _on_action(id: String) -> void:
 		Sfx.play("shield")
 		_refresh()
 		await get_tree().create_timer(0.7).timeout
+	elif id == "move":
+		await _move(p, pf, ef)
+	elif id == "push":
+		ko = await _push(p, e, pf, ef)
+	elif id == "throw":
+		ko = await _throw(p, e, pf, ef)
 	elif id.begins_with("potion:"):
 		await _potion(id.substr(7))
 	elif id.begins_with("skill:"):
 		ko = await _skill(id.substr(6))
 	else:
-		ko = await _attack(p, e, pf, ef, ACT[id])
+		ko = await _melee(p, e, pf, ef, ACT[id])
 	if ko or state != State.BATTLE:
 		return
 	await _enemy_turn()
+
+
+func _move(who: Dictionary, wf: Node3D, of: Node3D) -> void:
+	var far := _gap() > NEAR_GAP + 0.6
+	if far:
+		who.en = float(who.en) - 3.0
+		ui.set_log("%s se acerca" % ("Te acercas" if bool(who.is_player) else String(who.name)))
+		var tx := of.position.x - _dir_to(wf, of) * NEAR_GAP
+		await wf.walk(Vector3(tx, 0, 0), 0.6)
+	else:
+		who.en = float(who.en) - 2.0
+		ui.set_log("%s retrocede" % ("Retrocedes" if bool(who.is_player) else String(who.name)))
+		var tx := clampf(of.position.x - _dir_to(wf, of) * FAR_GAP, -5.5, 5.5)
+		await wf.walk(Vector3(tx, 0, 0), 0.5)
+	_refresh()
+	await get_tree().create_timer(0.2).timeout
 
 
 func _potion(kind: String) -> void:
@@ -335,6 +424,7 @@ func _potion(kind: String) -> void:
 	if kind == "vida":
 		var h := float(p.max_hp) * 0.5
 		p.hp = minf(float(p.max_hp), float(p.hp) + h)
+		pf.set_health(float(p.hp) / float(p.max_hp))
 		ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d" % int(h), Color("4ade80"))
 		ui.set_log("¡Bebes una poción de vida!", Color("86efac"))
 	else:
@@ -351,10 +441,9 @@ func _skill(id: String) -> bool:
 	for k in GameState.SKILLS:
 		if k.id == id:
 			s = k
-	if not s.is_empty():
-		GameState.bump("skills")
 	if s.is_empty():
 		return false
+	GameState.bump("skills")
 	if s.has("heal"):
 		p.en = float(p.en) - float(s.en)
 		pf.pray()
@@ -362,54 +451,151 @@ func _skill(id: String) -> bool:
 		await get_tree().create_timer(0.5).timeout
 		var h := float(p.max_hp) * float(s.heal)
 		p.hp = minf(float(p.max_hp), float(p.hp) + h)
+		pf.set_health(float(p.hp) / float(p.max_hp))
 		ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d" % int(h), Color("4ade80"))
 		ui.set_log("¡%s!" % s.name, Color("86efac"))
 		_refresh()
 		await get_tree().create_timer(0.6).timeout
 		return false
-	var spec := {"label": s.name, "cost": s.en, "mult": s.mult, "acc": s.acc, "anim": "spin" if id == "torbellino" else ("mid" if id == "escudazo" else "power"), "stun": int(s.get("stun", 0))}
-	return await _attack(p, e, pf, ef, spec)
+	if bool(s.get("ranged", false)):
+		return await _cast(p, e, pf, ef, s)
+	var spec := {"label": s.name, "cost": s.en, "mult": s.mult, "acc": s.acc, "anim": "spin" if id == "torbellino" else ("mid" if id == "escudazo" else "power"), "zone": "body", "stun": int(s.get("stun", 0))}
+	return await _melee(p, e, pf, ef, spec)
 
 
-## Un ataque completo. Devuelve true si el defensor cae (fin del combate).
-func _attack(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dictionary) -> bool:
+# --- daño, sangre y efectos ---
+func _apply_damage(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, dmg_in: float, o: Dictionary) -> void:
+	var near_melee: bool = bool(o.get("near_melee", false))
+	var zone := String(o.get("zone", ""))
+	var crit := not bool(o.get("no_crit", false)) and rng.randf() < _crit_chance(att, near_melee, zone)
+	var dmg := dmg_in
+	if crit:
+		dmg *= 1.5 + (0.3 if near_melee else 0.0)
+		if bool(att.is_player):
+			GameState.bump("crits")
+		base_scale = Engine.time_scale
+		Engine.time_scale = base_scale * 0.25
+		get_tree().create_timer(0.16, true, false, true).timeout.connect(func(): Engine.time_scale = base_scale)
+	var d := maxi(1, int(round(dmg)))
+	if int(att.get("weak", 0)) > 0:
+		d = maxi(1, int(d * 0.65))
+		att.weak = 0
+	var blocked := false
+	var shield_ok := false
+	var hit_pos := df.global_position + Vector3(0, 2.4, 0)
+	if bool(defn.guard) and not bool(o.get("unblockable", false)):
+		blocked = true
+		if float(defn.shield_hp) > 0.0:
+			shield_ok = true
+			d = maxi(1, int(d * 0.35))
+			defn.shield_hp = maxf(0.0, float(defn.shield_hp) - float(d) * 1.6 - 4.0)
+			df.set_shield(float(defn.shield_hp) / float(defn.shield_max))
+			if float(defn.shield_hp) <= 0.0:
+				if bool(defn.is_player):
+					defn.def = maxf(0.0, float(defn.def) - float(defn.shield_def))
+				var piece = df.break_shield()
+				if piece:
+					debris.append(piece)
+				ui.float_text(hit_pos + Vector3(0, 0.6, 0), "¡ESCUDO ROTO!", Color("fbbf24"), 30)
+				Sfx.play("over", 1.6, -6.0)
+		else:
+			d = maxi(1, int(d * 0.7))
+		defn.guard = false
+		df.guard = false
+		if not bool(o.get("no_react", false)):
+			df.block_react()
+		Sfx.play("shield", 0.9 + rng.randf() * 0.2)
+	else:
+		if not bool(o.get("no_react", false)):
+			df.hit_react(bool(o.get("strong", false)) or crit)
+		Sfx.play("hit", 0.9 + rng.randf() * 0.2)
+	defn.hp = float(defn.hp) - d
+	df.set_health(maxf(0.0, float(defn.hp)) / float(defn.max_hp))
+	if not shield_ok:
+		_blood(df, _dir_to(af, df), d, crit, zone)
+	shake = 0.5 + (0.5 if crit else 0.0) + (0.3 if bool(o.get("strong", false)) else 0.0)
+	var txt := "-%d" % d
+	if crit:
+		txt = "¡CRÍTICO! -%d" % d
+	elif blocked:
+		txt = "Bloqueado -%d" % d
+	ui.float_text(hit_pos, txt, Color("fbbf24") if crit else (Color("93c5fd") if blocked else Color("ef4444")), 42 if crit else 34)
+	if int(o.get("stun", 0)) > 0:
+		defn.stun = int(o.stun)
+	if String(o.get("zone", "")) == "legs" and not blocked:
+		defn.limp = 2
+		ui.float_text(hit_pos + Vector3(0, -0.7, 0), "¡Cojea!", Color("fca5a5"), 24)
+	_refresh()
+
+
+func _blood(df: Node3D, dirx: float, d: int, crit: bool, zone: String) -> void:
+	var spark := String(df.kind) in ["knight", "titan"]
+	var col: Color = Color("fde68a") if spark else df.blood_col
+	var h := 1.15
+	if zone == "head":
+		h = 1.85
+	elif zone == "legs":
+		h = 0.5
+	var origin := df.global_position + Vector3(0, h * df.scl * float(df.look.get("height", 1.0)), 0)
+	var n := clampi(int(d / 3.0) + (7 if crit else 3), 4, 20)
+	var mesh := Toon.sphere(0.055)
+	for i in n:
+		var drop := MeshInstance3D.new()
+		drop.mesh = mesh
+		drop.material_override = Toon.glow_mat(col)
+		drop.position = origin
+		add_child(drop)
+		var vx := dirx * rng.randf_range(0.8, 4.2)
+		var vy := rng.randf_range(1.5, 4.8)
+		var vz := rng.randf_range(-1.6, 1.6)
+		var tw := create_tween()
+		tw.tween_method(func(tt: float): drop.position = origin + Vector3(vx * tt, vy * tt - 4.9 * tt * tt * 2.0, vz * tt), 0.0, 0.55, 0.55)
+		tw.tween_callback(func():
+			var land := drop.position
+			drop.queue_free()
+			if not spark:
+				_stain(Vector3(land.x, 0.015, land.z), col))
+
+
+func _stain(pos: Vector3, col: Color) -> void:
+	var st := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	var r := rng.randf_range(0.07, 0.24)
+	cyl.top_radius = r
+	cyl.bottom_radius = r
+	cyl.height = 0.012
+	cyl.radial_segments = 10
+	st.mesh = cyl
+	st.material_override = Toon.glow_mat(col.darkened(0.15))
+	st.position = Vector3(pos.x, 0.012 + rng.randf() * 0.004, pos.z)
+	add_child(st)
+	debris.append(st)
+	if debris.size() > 140:
+		var old = debris.pop_front()
+		if is_instance_valid(old):
+			(old as Node).queue_free()
+
+
+# --- ataques ---
+func _melee(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dictionary) -> bool:
 	att.en = float(att.en) - float(spec.cost)
 	_refresh()
+	var far := _gap() > NEAR_GAP + 0.6
 	ui.set_log("%s usa %s" % ["Tú" if bool(att.is_player) else String(att.name), String(spec.label)])
-	var reach := af.position.distance_to(df.position) - 1.7
+	var reach := maxf(0.0, _gap() - NEAR_GAP)
+	var acc := float(spec.acc) - (0.1 if far else 0.0)
+	var zone := String(spec.get("zone", "body"))
 	await af.attack(String(spec.anim), reach, func():
-		if rng.randf() < _chance(att, defn, float(spec.acc), String(spec.anim)):
-			var d := _damage(att, defn, float(spec.mult))
-			var crit := rng.randf() < 0.08
-			if crit and bool(att.is_player):
-				GameState.bump("crits")
-			if crit:
-				d = int(d * 1.5)
-			var blocked := bool(defn.guard)
-			if blocked:
-				d = maxi(1, int(d * 0.4))
-				defn.guard = false
-				df.guard = false
-				df.block_react()
-				Sfx.play("shield")
-			else:
-				df.hit_react(float(spec.mult) >= 1.6)
-				Sfx.play("hit", 0.9 + rng.randf() * 0.2)
-			defn.hp = float(defn.hp) - d
-			shake = 0.5 + (0.5 if crit else 0.0) + (0.3 if float(spec.mult) >= 1.6 else 0.0)
-			var txt := "-%d" % d
-			if crit:
-				txt = "¡CRÍTICO! -%d" % d
-			elif blocked:
-				txt = "Bloqueado -%d" % d
-			ui.float_text(df.global_position + Vector3(0, 2.4, 0), txt, Color("fbbf24") if crit else (Color("93c5fd") if blocked else Color("ef4444")), 40 if crit else 34)
-			if int(spec.get("stun", 0)) > 0:
-				defn.stun = int(spec.stun)
+		if rng.randf() < _chance(att, defn, acc, String(spec.anim)):
+			_apply_damage(att, defn, af, df, _raw_damage(att, float(spec.mult)), {"near_melee": not far, "zone": zone, "strong": float(spec.mult) >= 1.5, "stun": int(spec.get("stun", 0))})
 		else:
 			df.dodge_react()
 			Sfx.play("jump", 1.3, -4.0)
-			ui.float_text(df.global_position + Vector3(0, 2.2, 0), "¡Falló!", Color("e5e7eb"), 30)
-		_refresh())
+			ui.float_text(df.global_position + Vector3(0, 2.2, 0), "¡Falló!", Color("e5e7eb"), 30))
+	return await _check_ko(att, defn, df)
+
+
+func _check_ko(att: Dictionary, defn: Dictionary, df: Node3D) -> bool:
 	if float(defn.hp) <= 0.0:
 		await _end_fight(bool(att.is_player))
 		return true
@@ -417,6 +603,99 @@ func _attack(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Di
 	return false
 
 
+func _push(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D) -> bool:
+	att.en = float(att.en) - 6.0
+	_refresh()
+	ui.set_log("%s empuja" % ("Empujas" if bool(att.is_player) else String(att.name)))
+	await af.attack("mid", 0.0, func():
+		_apply_damage(att, defn, af, df, _raw_damage(att, 0.25), {"no_crit": true, "no_react": true, "unblockable": true})
+		defn.weak = 1
+		defn.en = maxf(0.0, float(defn.en) - 5.0)
+		var tx := clampf(af.position.x + _dir_to(af, df) * FAR_GAP, -5.5, 5.5)
+		df.push_back(Vector3(tx, 0, 0))
+		ui.float_text(df.global_position + Vector3(0, 3.0, 0), "¡Empujado! (golpea menos)", Color("93c5fd"), 22))
+	return await _check_ko(att, defn, df)
+
+
+func _throw(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D) -> bool:
+	att.en = float(att.en) - 8.0
+	_refresh()
+	ui.set_log("¡%s lanza su arma!" % ("Lanzas" if bool(att.is_player) else String(att.name)))
+	var wid := String(att.weapon_id)
+	var raw := (float(att.wdmg) * 1.7 + float(att.fue) * 1.2) * rng.randf_range(0.9, 1.1)
+	var hit := rng.randf() < _chance(att, defn, -0.04)
+	var flight: Array = []
+	await af.throw_anim(func():
+		af.drop_weapon()
+		att.armed = false
+		var w: Node3D = af._make_weapon(wid)
+		add_child(w)
+		var from := af.global_position + Vector3(0, 1.7 * af.scl, 0) + (-af.global_transform.basis.z) * 0.5
+		w.global_position = from
+		var target := df.global_position + Vector3(0, 1.2 * df.scl, 0)
+		if not hit:
+			target += Vector3(_dir_to(af, df) * 1.6, -0.9, 0.5)
+		var dur := clampf(from.distance_to(target) / 13.0, 0.25, 0.6)
+		var tw := create_tween().set_parallel(true)
+		tw.tween_property(w, "global_position", target, dur)
+		tw.tween_property(w, "rotation:z", -_dir_to(af, df) * TAU * 2.5, dur)
+		debris.append(w)
+		flight.append(tw)
+		Sfx.play("jump", 0.7))
+	if flight.size() > 0:
+		await (flight[0] as Tween).finished
+	att.wdmg = 3
+	att.wacc = -0.06
+	if hit:
+		_apply_damage(att, defn, af, df, raw, {"zone": "body", "strong": true, "near_melee": false})
+	else:
+		df.dodge_react()
+		ui.float_text(df.global_position + Vector3(0, 2.2, 0), "¡Falló!", Color("e5e7eb"), 30)
+	return await _check_ko(att, defn, df)
+
+
+func _cast(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dictionary) -> bool:
+	att.en = float(att.en) - float(spec.en)
+	_refresh()
+	ui.set_log("¡%s lanza %s!" % ["Tú" if bool(att.is_player) else String(att.name), String(spec.name)])
+	var col := Color(String(spec.get("color", "f97316")))
+	var from: Vector3 = await af.cast_start(col)
+	Sfx.play("power", 1.3)
+	var ball := Node3D.new()
+	Toon.glow(ball, Toon.sphere(0.22), col.lightened(0.5))
+	Toon.glow(ball, Toon.sphere(0.42), col, Vector3.ZERO, Vector3.ZERO, 0.45)
+	add_child(ball)
+	ball.global_position = from
+	if af.orb:
+		af.orb.visible = false
+	var target := df.global_position + Vector3(0, 1.2 * df.scl, 0)
+	var dur := clampf(from.distance_to(target) / 12.0, 0.3, 0.7)
+	var tw := create_tween()
+	tw.tween_property(ball, "global_position", target, dur)
+	await tw.finished
+	ball.queue_free()
+	for i in 10:
+		var sp := MeshInstance3D.new()
+		sp.mesh = BoxMesh.new()
+		(sp.mesh as BoxMesh).size = Vector3(0.12, 0.12, 0.12)
+		sp.material_override = Toon.glow_mat(col)
+		sp.position = target
+		add_child(sp)
+		var tw2 := create_tween().set_parallel(true)
+		tw2.tween_property(sp, "position", target + Vector3(rng.randf_range(-1, 1), rng.randf_range(-0.2, 1.2), rng.randf_range(-1, 1)), 0.35)
+		tw2.tween_property(sp, "scale", Vector3.ZERO, 0.35)
+		tw2.chain().tween_callback(sp.queue_free)
+	if rng.randf() < _chance(att, defn, float(spec.acc)):
+		var raw := float(att.magic) * float(spec.mag) * rng.randf_range(0.9, 1.1) + 4.0
+		_apply_damage(att, defn, af, df, raw - float(defn.def) * 0.2, {"zone": "body", "strong": true, "near_melee": false})
+	else:
+		df.dodge_react()
+		ui.float_text(df.global_position + Vector3(0, 2.2, 0), "¡Falló!", Color("e5e7eb"), 30)
+	await af.cast_end()
+	return await _check_ko(att, defn, df)
+
+
+# --- turno del rival ---
 func _enemy_turn() -> void:
 	if state != State.BATTLE:
 		return
@@ -424,6 +703,7 @@ func _enemy_turn() -> void:
 	e.en = minf(float(e.max_en), float(e.en) + 3.0)
 	e.guard = false
 	ef.guard = false
+	e.limp = maxi(0, int(e.limp) - 1)
 	_refresh()
 	if int(e.stun) > 0:
 		e.stun = int(e.stun) - 1
@@ -434,13 +714,18 @@ func _enemy_turn() -> void:
 	var ko := false
 	var en_now := float(e.en)
 	var hp_ratio := float(e.hp) / float(e.max_hp)
-	if bool(e.get("boss", false)) and hp_ratio < 0.3 and not enemy_potion:
+	var far := _gap() > NEAR_GAP + 0.6
+	var boss: bool = bool(e.get("boss", false))
+	var kindn := String(e.look.kind)
+	var r := rng.randf()
+	if boss and hp_ratio < 0.3 and not enemy_potion:
 		enemy_potion = true
 		ef.drink()
 		Sfx.play("power")
 		await get_tree().create_timer(0.6).timeout
 		var h := float(e.max_hp) * 0.35
 		e.hp = minf(float(e.max_hp), float(e.hp) + h)
+		ef.set_health(float(e.hp) / float(e.max_hp))
 		ui.float_text(ef.global_position + Vector3(0, 2.4, 0), "+%d" % int(h), Color("4ade80"))
 		ui.set_log("¡%s bebe una poción!" % e.name, Color("fca5a5"))
 		_refresh()
@@ -452,20 +737,32 @@ func _enemy_turn() -> void:
 		ui.set_log("%s se cubre" % e.name)
 		_refresh()
 		await get_tree().create_timer(0.8).timeout
+	elif far:
+		if kindn in ["demon", "titan", "knight"] and en_now >= 16.0 and r < 0.45:
+			var sp := {"name": "Bola de fuego", "en": 16, "mag": 1.0, "acc": 0.0, "color": "ef4444" if kindn != "titan" else "38bdf8"}
+			ko = await _cast(e, p, ef, pf, sp)
+		elif bool(e.armed) and kindn in ["human", "orc", "skeleton", "lizard"] and r < 0.14 and en_now >= 8.0:
+			ko = await _throw(e, p, ef, pf)
+		elif r < 0.55 and en_now >= 3.0:
+			await _move(e, ef, pf)
+		else:
+			ko = await _melee(e, p, ef, pf, ACT["body"])
 	else:
-		var choice := rng.randf()
-		var spec: Dictionary = ACT["mid"]
-		if bool(e.get("boss", false)) and en_now >= 24.0 and choice < 0.28:
-			spec = {"label": "Golpe devastador", "cost": 24, "mult": 2.5, "acc": -0.1, "anim": "power"}
-		elif choice < 0.3:
-			spec = ACT["fast"]
-		elif choice < 0.55 and en_now >= 11.0:
-			spec = ACT["strong"]
-		elif choice > 0.9:
+		var spec: Dictionary = ACT["body"]
+		if boss and en_now >= 24.0 and r < 0.28:
+			spec = {"label": "Golpe devastador", "cost": 24, "mult": 2.5, "acc": -0.1, "anim": "power", "zone": "body"}
+		elif r < 0.12 and en_now >= 6.0:
+			ko = await _push(e, p, ef, pf)
+			spec = {}
+		elif r < 0.3:
+			spec = ACT["legs"]
+		elif r < 0.52 and en_now >= 10.0:
+			spec = ACT["head"]
+		elif r > 0.93:
 			spec = {"label": "Guardia"}
 		if spec.has("cost"):
-			ko = await _attack(e, p, ef, pf, spec)
-		else:
+			ko = await _melee(e, p, ef, pf, spec)
+		elif spec.has("label"):
 			e.guard = true
 			ef.guard = true
 			e.en = minf(float(e.max_en), en_now + 8.0)
@@ -522,7 +819,6 @@ func _end_fight(win: bool, surrender: bool = false) -> void:
 func _after_result() -> void:
 	if state != State.RESULT:
 		return
-	var won := GameState.fight_won(fight_idx) and float(e.hp) > 0.0 and float(p.hp) > 0.0
 	var next := fight_idx
 	if float(e.hp) <= 0.0 and fight_idx + 1 < GameState.ENEMIES.size():
 		next = fight_idx + 1
@@ -542,16 +838,36 @@ func _bot(delta: float) -> void:
 		State.BATTLE:
 			if busy or not ui.act_panel.visible:
 				return
-			var acts := _player_actions()
-			var pick := "mid"
+			var far := _gap() > NEAR_GAP + 0.6
+			var pick := "body"
+			var r := rng.randf()
+			var ranged := ""
+			for s in GameState.unlocked_skills():
+				if bool(s.get("ranged", false)) and float(p.en) >= float(s.en) + 4.0:
+					ranged = "skill:" + String(s.id)
 			if float(p.hp) < float(p.max_hp) * 0.35 and GameState.potion_count("vida") > 0:
 				pick = "potion:vida"
 			elif float(p.en) < 6.0:
 				pick = "guard"
-			elif float(p.en) >= 11.0 and rng.randf() < 0.4:
-				pick = "strong"
-			elif GameState.unlocked_skills().size() > 0 and float(p.en) >= 20.0 and rng.randf() < 0.3:
-				pick = "skill:" + String(GameState.unlocked_skills()[0].id)
+			elif far:
+				if ranged != "" and r < 0.35:
+					pick = ranged
+				elif bool(p.armed) and r < 0.45 and float(p.en) >= 12.0:
+					pick = "throw"
+				elif r < 0.8:
+					pick = "move"
+				else:
+					pick = "body"
+			else:
+				if r < 0.1 and float(p.en) >= 8.0:
+					pick = "push"
+				elif r < 0.4 and float(p.en) >= 12.0:
+					pick = "head"
+				elif r < 0.55:
+					pick = "legs"
+				elif GameState.unlocked_skills().size() > 0 and float(p.en) >= 22.0 and r < 0.7:
+					var us: Array = GameState.unlocked_skills()
+					pick = "skill:" + String(us[0].id)
 			_on_action(pick)
 		State.RESULT:
 			if ui.pages["result"].visible:

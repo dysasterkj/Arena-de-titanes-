@@ -60,6 +60,10 @@ func setup(l: Dictionary) -> void:
 	look = l
 	for c in get_children():
 		c.queue_free()
+	shield_pivot = null
+	cracks = []
+	shield_broken = false
+	orb = null
 	kind = String(l.get("kind", "human"))
 	scl = float(l.get("scale", 1.0))
 	var hh := float(l.get("height", 1.0))
@@ -178,6 +182,7 @@ func setup(l: Dictionary) -> void:
 	# arma y escudo
 	var holder := _pivot(fore_r, Vector3(0, -0.34, 0))
 	holder.rotation.x = PI
+	weapon_holder = holder
 	holder.add_child(_make_weapon(String(l.get("weapon", "espada_corta"))))
 	_shield_visual(String(l.get("shield", "none")))
 	arm_r.rotation.x = POSE_R.x
@@ -188,6 +193,7 @@ func setup(l: Dictionary) -> void:
 	arm_r.rotation.z = -0.15
 	leg_l.rotation.x = -0.25
 	leg_r.rotation.x = 0.3
+	_build_wounds()
 	dead = false
 	busy = false
 	guard = false
@@ -413,6 +419,13 @@ func _shield_visual(id: String) -> void:
 	Toon.part(s, Toon.cyl(0.4, 0.4, 0.06), c, Vector3.ZERO, Vector3(PI / 2, 0, 0))
 	Toon.part(s, Toon.torus(0.36, 0.43), rim, Vector3(0, 0, 0.03), Vector3(PI / 2, 0, 0), false)
 	Toon.part(s, Toon.sphere(0.12), rim, Vector3(0, 0, -0.07), Vector3.ZERO, false)
+	shield_pivot = s
+	shield_broken = false
+	cracks = []
+	for cd in [[Vector3(-0.12, 0.14, -0.075), 0.5], [Vector3(0.1, -0.1, -0.075), -0.7], [Vector3(0.05, 0.2, -0.075), -0.2], [Vector3(-0.15, -0.15, -0.075), 0.9]]:
+		var cr := Toon.part(s, Toon.box(Vector3(0.06, 0.36, 0.02)), Color("1c1917"), cd[0], Vector3(0, 0, cd[1]), false)
+		cr.visible = false
+		cracks.append(cr)
 	for i in 8:
 		var a := i * TAU / 8.0
 		Toon.part(s, Toon.sphere(0.03), rim.lightened(0.4), Vector3(cos(a) * 0.3, sin(a) * 0.3, -0.04), Vector3.ZERO, false)
@@ -495,20 +508,30 @@ func _process(delta: float) -> void:
 		return
 	t += delta
 	if cape_node:
-		cape_node.rotation.x = 0.12 + sin(t * 3.0 + phase) * 0.08 + (0.0 if not busy else 0.45)
+		cape_node.rotation.x = 0.12 + sin(t * 3.0 + phase) * 0.08 + (0.45 if busy else 0.0)
 	if dead:
 		return
+	var slouch := (1.0 - health_ratio) * 0.25
+	if moving:
+		var s := sin(t * 15.0)
+		leg_l.rotation.x = s * 0.85
+		leg_r.rotation.x = -s * 0.85
+		model.position.y = absf(s) * 0.07
+	else:
+		var wob := sin(t * 3.0 + phase)
+		leg_l.rotation.x = lerpf(leg_l.rotation.x, -0.25 + wob * 0.07, 0.2)
+		leg_r.rotation.x = lerpf(leg_r.rotation.x, 0.3 - wob * 0.07, 0.2)
 	if not busy:
 		model.position.y = sin(t * 2.2 + phase) * 0.03
-		body.rotation.x = lerpf(body.rotation.x, sin(t * 2.2 + phase) * 0.03, 0.2)
+		body.rotation.x = lerpf(body.rotation.x, sin(t * 2.2 + phase) * 0.03 + slouch, 0.2)
 		var tgt_l := Vector2(1.55, 1.55) if guard else POSE_L
 		arm_l.rotation.x = lerpf(arm_l.rotation.x, tgt_l.x + sin(t * 2.0 + phase) * 0.05, 0.15)
 		fore_l.rotation.x = lerpf(fore_l.rotation.x, tgt_l.y, 0.15)
-		arm_r.rotation.x = lerpf(arm_r.rotation.x, POSE_R.x + sin(t * 2.0 + phase + 1.0) * 0.05, 0.15)
+		arm_r.rotation.x = lerpf(arm_r.rotation.x, POSE_R.x + sin(t * 2.0 + phase + 1.0) * 0.05 + slouch * 0.6, 0.15)
 		fore_r.rotation.x = lerpf(fore_r.rotation.x, POSE_R.y, 0.15)
 		model.rotation.y = lerpf(model.rotation.y, 0.0, 0.2)
 		body.rotation.y = lerpf(body.rotation.y, 0.0, 0.2)
-		head.rotation.x = lerpf(head.rotation.x, 0.0, 0.2)
+		head.rotation.x = lerpf(head.rotation.x, slouch * 0.5, 0.2)
 	if tail:
 		tail.rotation.y = sin(t * 3.0 + phase) * 0.3
 
@@ -555,8 +578,9 @@ func attack(style: String, reach: float, on_strike: Callable) -> void:
 			tw.tween_property(fore_r, "rotation:x", 0.4, 0.3)
 			tw.tween_property(model, "position:y", 0.45, 0.3)
 	await tw.finished
+	moving = reach > 0.2
 	var tw2 := _tw()
-	tw2.tween_property(self, "position", lunge, 0.13)
+	tw2.tween_property(self, "position", lunge, 0.2 if reach > 0.2 else 0.13)
 	match style:
 		"high":
 			tw2.tween_property(arm_r, "rotation:x", 0.3, 0.13)
@@ -575,14 +599,17 @@ func attack(style: String, reach: float, on_strike: Callable) -> void:
 			tw2.tween_property(fore_r, "rotation:x", 0.1, 0.14)
 			tw2.tween_property(model, "position:y", 0.0, 0.14)
 			tw2.tween_property(body, "rotation:x", 0.5, 0.14)
-	await get_tree().create_timer(0.1).timeout
+	await get_tree().create_timer(0.1 if reach <= 0.2 else 0.2).timeout
 	on_strike.call()
 	await tw2.finished
+	moving = false
 	await get_tree().create_timer(0.12).timeout
 	model.rotation.y = 0.0
+	moving = reach > 0.2
 	var tw3 := _tw()
-	tw3.tween_property(self, "position", start, 0.3)
+	tw3.tween_property(self, "position", start, 0.3 if reach > 0.2 else 0.2)
 	await tw3.finished
+	moving = false
 	await _rest_pose(0.18)
 	busy = false
 
@@ -688,5 +715,165 @@ func pray() -> void:
 	var tw2 := _tw()
 	tw2.tween_property(model, "position:y", 0.0, 0.2)
 	await tw2.finished
+	await _rest_pose(0.2)
+	busy = false
+
+
+# ======================= Pasos, heridas, escudo y lanzamientos =======================
+var moving := false
+var weapon_holder: Node3D
+var shield_pivot: Node3D
+var cracks: Array = []
+var wounds: Array = [[], [], []]
+var health_ratio := 1.0
+var shield_ratio := 1.0
+var shield_broken := false
+var blood_col := Color("b91c1c")
+var orb: Node3D
+
+
+func _build_wounds() -> void:
+	wounds = [[], [], []]
+	health_ratio = 1.0
+	blood_col = Color("b91c1c")
+	match kind:
+		"demon": blood_col = Color("581c87")
+		"lizard": blood_col = Color("15803d")
+		"skeleton": blood_col = Color("4b5563")
+		"knight", "titan": blood_col = Color("1f2937")
+	var defs := [
+		[body, Vector3(0.24, 0.04, 0.03), Vector3(0.08, 0.58, -0.272), Vector3(0, 0, 0.6), 0],
+		[head, Vector3(0.03, 0.13, 0.02), Vector3(0.08, 0.34, -0.25), Vector3.ZERO, 0],
+		[body, Vector3(0.28, 0.04, 0.03), Vector3(-0.08, 0.44, -0.274), Vector3(0, 0, -0.6), 1],
+		[body, Vector3(0.16, 0.14, 0.02), Vector3(0.05, 0.18, -0.268), Vector3.ZERO, 1],
+		[head, Vector3(0.03, 0.1, 0.02), Vector3(0.0, 0.04, -0.255), Vector3.ZERO, 1],
+		[head, Vector3(0.1, 0.03, 0.02), Vector3(-0.12, 0.17, -0.245), Vector3(0, 0, 0.4), 1],
+		[body, Vector3(0.5, 0.06, 0.03), Vector3(0.0, 0.5, -0.276), Vector3(0, 0, 0.15), 2],
+		[body, Vector3(0.03, 0.2, 0.02), Vector3(-0.12, 0.3, -0.272), Vector3.ZERO, 2],
+		[body, Vector3(0.03, 0.16, 0.02), Vector3(0.14, 0.36, -0.272), Vector3.ZERO, 2],
+		[body, Vector3(0.14, 0.2, 0.05), Vector3(0.38, 0.72, -0.1), Vector3.ZERO, 2],
+		[head, Vector3(0.12, 0.1, 0.02), Vector3(-0.1, 0.25, -0.235), Vector3.ZERO, 2],
+	]
+	for d in defs:
+		var col := blood_col if not (int(d[4]) == 2 and d[0] == head) else Color("4c1d95")
+		var n := Toon.part(d[0], Toon.box(d[1] * 1.7), col, d[2] + Vector3(0, 0, -0.008), d[3], false)
+		n.visible = false
+		wounds[int(d[4])].append(n)
+
+
+func set_health(r: float) -> void:
+	health_ratio = r
+	var th := [0.75, 0.5, 0.25]
+	for i in 3:
+		for n in wounds[i]:
+			(n as Node3D).visible = r < float(th[i])
+
+
+func set_shield(r: float) -> void:
+	shield_ratio = r
+	if cracks.size() >= 4:
+		cracks[0].visible = r < 0.7
+		cracks[1].visible = r < 0.7
+		cracks[2].visible = r < 0.35
+		cracks[3].visible = r < 0.35
+	if shield_pivot and not shield_broken:
+		shield_pivot.scale = Vector3.ONE * lerpf(0.82, 1.0, clampf(r, 0.0, 1.0))
+
+
+func break_shield() -> Node3D:
+	if shield_pivot == null or shield_broken:
+		return null
+	shield_broken = true
+	var piece := shield_pivot
+	var gp := piece.global_position
+	piece.reparent(get_parent())
+	piece.global_position = gp
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(piece, "global_position", Vector3(gp.x + randf_range(-0.9, 0.9), 0.12, gp.z + 0.6), 0.55).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(piece, "rotation", Vector3(PI / 2.0, randf() * 3.0, 0.3), 0.55)
+	return piece
+
+
+func drop_weapon() -> void:
+	if weapon_holder:
+		weapon_holder.visible = false
+
+
+func walk(to: Vector3, dur: float) -> void:
+	busy = true
+	moving = true
+	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(self, "position", to, dur)
+	await tw.finished
+	moving = false
+	busy = false
+
+
+func push_back(to: Vector3) -> void:
+	busy = true
+	moving = true
+	var tw := _tw()
+	tw.tween_property(self, "position", to, 0.4)
+	tw.tween_property(body, "rotation:x", -0.45, 0.2)
+	tw.tween_property(head, "rotation:x", -0.35, 0.2)
+	await tw.finished
+	moving = false
+	var tw2 := _tw()
+	tw2.tween_property(body, "rotation:x", 0.0, 0.25)
+	await tw2.finished
+	busy = false
+
+
+func cast_start(color: Color) -> Vector3:
+	busy = true
+	var tw := _tw()
+	tw.tween_property(arm_r, "rotation:x", 2.4, 0.3)
+	tw.tween_property(fore_r, "rotation:x", 1.0, 0.3)
+	tw.tween_property(arm_l, "rotation:x", 2.4, 0.3)
+	tw.tween_property(fore_l, "rotation:x", 1.0, 0.3)
+	tw.tween_property(body, "rotation:x", -0.15, 0.3)
+	if orb == null:
+		orb = Node3D.new()
+		add_child(orb)
+		Toon.glow(orb, Toon.sphere(0.2), Color.WHITE)
+		Toon.glow(orb, Toon.sphere(0.34), Color.WHITE, Vector3.ZERO, Vector3.ZERO, 0.4)
+	orb.position = Vector3(0, 1.75 * scl, -0.55)
+	orb.scale = Vector3.ONE * 0.2
+	orb.visible = true
+	for ch in orb.get_children():
+		(ch as MeshInstance3D).material_override = Toon.glow_mat(color, 1.0 if (ch as MeshInstance3D).mesh.get_aabb().size.x < 0.5 else 0.4)
+	tw.tween_property(orb, "scale", Vector3.ONE, 0.3)
+	await tw.finished
+	return orb.global_position
+
+
+func cast_end() -> void:
+	if orb:
+		orb.visible = false
+	var tw := _tw()
+	tw.tween_property(arm_r, "rotation:x", 0.5, 0.12)
+	tw.tween_property(arm_l, "rotation:x", 0.5, 0.12)
+	tw.tween_property(body, "rotation:x", 0.3, 0.12)
+	await tw.finished
+	await get_tree().create_timer(0.15).timeout
+	await _rest_pose(0.2)
+	busy = false
+
+
+func throw_anim(on_release: Callable) -> void:
+	busy = true
+	var tw := _tw()
+	tw.tween_property(arm_r, "rotation:x", 3.1, 0.3)
+	tw.tween_property(fore_r, "rotation:x", 0.4, 0.3)
+	tw.tween_property(body, "rotation:x", -0.35, 0.3)
+	await tw.finished
+	var tw2 := _tw()
+	tw2.tween_property(arm_r, "rotation:x", 0.4, 0.12)
+	tw2.tween_property(fore_r, "rotation:x", 0.1, 0.12)
+	tw2.tween_property(body, "rotation:x", 0.5, 0.12)
+	await get_tree().create_timer(0.07).timeout
+	on_release.call()
+	await tw2.finished
+	await get_tree().create_timer(0.2).timeout
 	await _rest_pose(0.2)
 	busy = false

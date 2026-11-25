@@ -549,22 +549,22 @@ func _build_battle() -> void:
 	var pp := Panel.new()
 	pp.add_theme_stylebox_override("panel", _sb(Color(0.08, 0.04, 0.03, 0.82), 16, Color("a16207"), 2))
 	b.add_child(pp)
-	_place(pp, W - 302, H - 436, 290, 92)
+	_place(pp, W - 302, H - 496, 290, 92)
 	p_name = _lbl("Tú", 20, Color.WHITE)
 	b.add_child(p_name)
-	_place(p_name, W - 290, H - 432, 266, 28)
+	_place(p_name, W - 290, H - 492, 266, 28)
 	p_hp = _bar(C_RED, 262, 16)
 	b.add_child(p_hp)
-	_place(p_hp, W - 290, H - 402, 262, 16)
+	_place(p_hp, W - 290, H - 462, 262, 16)
 	p_hp_lbl = _lbl("", 12, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER)
 	b.add_child(p_hp_lbl)
-	_place(p_hp_lbl, W - 290, H - 402, 262, 16)
+	_place(p_hp_lbl, W - 290, H - 462, 262, 16)
 	p_en = _bar(C_BLUE, 262, 14)
 	b.add_child(p_en)
-	_place(p_en, W - 290, H - 378, 262, 14)
+	_place(p_en, W - 290, H - 438, 262, 14)
 	p_en_lbl = _lbl("", 11, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER)
 	b.add_child(p_en_lbl)
-	_place(p_en_lbl, W - 290, H - 378, 262, 14)
+	_place(p_en_lbl, W - 290, H - 438, 262, 14)
 
 	# mensaje
 	log_lbl = _lbl("", 22, Color("fde68a"), HORIZONTAL_ALIGNMENT_CENTER)
@@ -579,11 +579,11 @@ func _build_battle() -> void:
 	var bg := Panel.new()
 	bg.add_theme_stylebox_override("panel", _sb(Color(0.08, 0.04, 0.03, 0.92), 22, Color("a16207"), 3))
 	act_panel.add_child(bg)
-	_place(bg, 8, H - 334, W - 16, 326)
+	_place(bg, 8, H - 396, W - 16, 388)
 	act_box = VBoxContainer.new()
 	act_box.add_theme_constant_override("separation", 7)
 	act_panel.add_child(act_box)
-	_place(act_box, 18, H - 326, W - 36, 310)
+	_place(act_box, 18, H - 388, W - 36, 372)
 
 	float_layer = Control.new()
 	float_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -627,50 +627,143 @@ func show_actions(acts: Dictionary) -> void:
 	_build_actions()
 
 
-func _action_btn(a: Dictionary, color: Color, w: float, h: float) -> Button:
-	var b := _btn("%s\n%s" % [a.label, a.sub], color, 16, w, h)
+func _action_btn(a: Dictionary, color: Color, w: float, h: float, wide: bool = false) -> Button:
+	var text := ""
+	if wide:
+		text = "        %s  ·  %s" % [a.label, a.sub]
+	else:
+		text = "\n\n\n%s\n%s" % [a.label, a.sub]
+	var b := _btn(text, color, 13 if not wide else 16, w, h)
 	b.disabled = not bool(a.enabled)
+	if wide:
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var ic := Control.new()
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(ic)
+	var isz := 38.0 if not wide else 36.0
+	_place(ic, (w - isz) * 0.5 if not wide else 10.0, 3.0 if not wide else (h - isz) * 0.5, isz, isz)
+	var icon := String(a.get("icon", "power"))
+	ic.draw.connect(func(): _glyph(ic, icon, isz, b.disabled))
 	var aid: String = a.id
 	b.pressed.connect(func(): action_pressed.emit(aid))
 	return b
 
 
+func _glyph(c: Control, id: String, sz: float, dim: bool) -> void:
+	var h := sz * 0.5
+	var al := 0.45 if dim else 1.0
+	var skin := Color("f1c27d", al)
+	var white := Color(1, 1, 1, al)
+	var red := Color("ef4444", al)
+	var dark := Color("2a1608", al)
+	match id:
+		"head":
+			c.draw_circle(Vector2(h, h * 1.05), sz * 0.3, skin)
+			c.draw_circle(Vector2(h - sz * 0.1, h), sz * 0.04, dark)
+			c.draw_circle(Vector2(h + sz * 0.1, h), sz * 0.04, dark)
+			c.draw_arc(Vector2(h, h * 1.2), sz * 0.1, 0.2, PI - 0.2, 8, dark, 2.0)
+			c.draw_line(Vector2(sz * 0.05, sz * 0.12), Vector2(sz * 0.95, sz * 0.5), white, 5.0)
+			c.draw_line(Vector2(sz * 0.05, sz * 0.12), Vector2(sz * 0.95, sz * 0.5), red, 2.0)
+			c.draw_circle(Vector2(sz * 0.8, sz * 0.43), sz * 0.07, red)
+		"body":
+			c.draw_circle(Vector2(h, sz * 0.2), sz * 0.14, skin)
+			c.draw_rect(Rect2(h - sz * 0.26, sz * 0.33, sz * 0.52, sz * 0.5), Color("b91c1c", al))
+			c.draw_line(Vector2(sz * 0.05, sz * 0.3), Vector2(sz * 0.95, sz * 0.75), white, 5.0)
+			c.draw_line(Vector2(sz * 0.05, sz * 0.3), Vector2(sz * 0.95, sz * 0.75), red, 2.0)
+		"legs":
+			c.draw_rect(Rect2(h - sz * 0.22, sz * 0.12, sz * 0.18, sz * 0.7), skin)
+			c.draw_rect(Rect2(h + sz * 0.04, sz * 0.12, sz * 0.18, sz * 0.7), skin)
+			c.draw_rect(Rect2(h - sz * 0.26, sz * 0.8, sz * 0.24, sz * 0.12), Color("6b4423", al))
+			c.draw_rect(Rect2(h + sz * 0.02, sz * 0.8, sz * 0.24, sz * 0.12), Color("6b4423", al))
+			c.draw_line(Vector2(sz * 0.05, sz * 0.5), Vector2(sz * 0.95, sz * 0.82), white, 5.0)
+			c.draw_line(Vector2(sz * 0.05, sz * 0.5), Vector2(sz * 0.95, sz * 0.82), red, 2.0)
+		"guard":
+			c.draw_colored_polygon(PackedVector2Array([Vector2(sz * 0.14, sz * 0.14), Vector2(sz * 0.86, sz * 0.14), Vector2(sz * 0.8, sz * 0.58), Vector2(h, sz * 0.92), Vector2(sz * 0.2, sz * 0.58)]), Color("60a5fa", al))
+			c.draw_colored_polygon(PackedVector2Array([Vector2(sz * 0.26, sz * 0.24), Vector2(sz * 0.74, sz * 0.24), Vector2(sz * 0.7, sz * 0.54), Vector2(h, sz * 0.78), Vector2(sz * 0.3, sz * 0.54)]), Color("1d4ed8", al))
+			c.draw_circle(Vector2(h, sz * 0.45), sz * 0.09, Color("fbbf24", al))
+		"push":
+			c.draw_rect(Rect2(sz * 0.1, sz * 0.3, sz * 0.3, sz * 0.4), skin)
+			for i in 3:
+				var y := sz * (0.3 + i * 0.2)
+				c.draw_line(Vector2(sz * 0.45, y), Vector2(sz * 0.9, y), white, 4.0)
+				c.draw_line(Vector2(sz * 0.8, y - sz * 0.07), Vector2(sz * 0.9, y), white, 4.0)
+				c.draw_line(Vector2(sz * 0.8, y + sz * 0.07), Vector2(sz * 0.9, y), white, 4.0)
+		"approach", "retreat":
+			var dir := 1.0 if id == "approach" else -1.0
+			var col := Color("fbbf24", al) if id == "approach" else Color("93c5fd", al)
+			for i in 2:
+				var x := h + dir * (sz * 0.12 - sz * 0.22 + i * sz * 0.3) - dir * sz * 0.05
+				c.draw_polyline(PackedVector2Array([Vector2(x - dir * sz * 0.16, sz * 0.2), Vector2(x + dir * sz * 0.1, h), Vector2(x - dir * sz * 0.16, sz * 0.8)]), col, 7.0)
+		"throw":
+			c.draw_line(Vector2(sz * 0.2, sz * 0.8), Vector2(sz * 0.8, sz * 0.2), Color("e5e7eb", al), 7.0)
+			c.draw_line(Vector2(sz * 0.14, sz * 0.86), Vector2(sz * 0.3, sz * 0.7), Color("a16207", al), 7.0)
+			for i in 3:
+				c.draw_line(Vector2(sz * 0.1, sz * (0.25 + i * 0.12)), Vector2(sz * 0.38, sz * (0.25 + i * 0.12)), white, 3.0)
+		"spell":
+			c.draw_circle(Vector2(h, h), sz * 0.26, Color("f97316", al))
+			c.draw_circle(Vector2(h, h), sz * 0.14, Color("fde047", al))
+			for i in 8:
+				var a := i * TAU / 8.0
+				c.draw_line(Vector2(h + cos(a) * sz * 0.3, h + sin(a) * sz * 0.3), Vector2(h + cos(a) * sz * 0.46, h + sin(a) * sz * 0.46), Color("fde047", al), 3.0)
+		"power":
+			var pts := PackedVector2Array()
+			for i in 10:
+				var ang := -PI / 2.0 + i * PI / 5.0
+				var rr := sz * 0.46 if i % 2 == 0 else sz * 0.2
+				pts.append(Vector2(h + cos(ang) * rr, sz * 0.54 + sin(ang) * rr))
+			c.draw_colored_polygon(pts, Color("fde047", al))
+		"heal":
+			c.draw_rect(Rect2(h - sz * 0.09, sz * 0.15, sz * 0.18, sz * 0.7), Color("4ade80", al))
+			c.draw_rect(Rect2(sz * 0.15, h - sz * 0.09, sz * 0.7, sz * 0.18), Color("4ade80", al))
+		"potion_hp", "potion_en":
+			var liq := Color("ef4444", al) if id == "potion_hp" else Color("38bdf8", al)
+			c.draw_circle(Vector2(h, sz * 0.62), sz * 0.26, liq)
+			c.draw_rect(Rect2(h - sz * 0.08, sz * 0.14, sz * 0.16, sz * 0.26), Color("e5e7eb", al))
+			c.draw_rect(Rect2(h - sz * 0.12, sz * 0.1, sz * 0.24, sz * 0.07), Color("a16207", al))
+		_:
+			c.draw_circle(Vector2(h, h), sz * 0.3, white)
+
+
 func _build_actions() -> void:
 	_clear(act_box)
 	if sub_mode == "main":
-		act_box.add_child(_lbl("TU TURNO", 20, C_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+		var head := HBoxContainer.new()
+		var near: bool = bool(cur_actions.get("near", false))
+		var dl := _lbl("CERCA: más críticos y empujar" if near else "LEJOS: acércate o usa magia/lanza", 16, C_GREEN if near else C_BLUE)
+		dl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		head.add_child(dl)
+		var sr := _btn("RENDIRSE", Color("44403c"), 12, 96, 28)
+		sr.pressed.connect(func(): surrender_pressed.emit())
+		head.add_child(sr)
+		act_box.add_child(head)
 		var grid := GridContainer.new()
 		grid.columns = 3
 		grid.add_theme_constant_override("h_separation", 7)
 		grid.add_theme_constant_override("v_separation", 7)
-		var cols := [Color("0d9488"), Color("b45309"), Color("b91c1c"), Color("1d4ed8"), Color("7e22ce"), Color("15803d")]
-		var i := 0
+		var cols := {"head": Color("b91c1c"), "body": Color("b45309"), "legs": Color("a16207"), "guard": Color("1d4ed8"), "push": Color("0d9488"), "move": Color("475569"), "throw": Color("92400e")}
 		for a in cur_actions.main:
-			grid.add_child(_action_btn(a, cols[i % cols.size()], 168, 78))
-			i += 1
-		var bs := _btn("PODERES\n%d disponibles" % cur_actions.skills.size(), cols[4], 16, 168, 78)
-		bs.disabled = cur_actions.skills.is_empty()
+			grid.add_child(_action_btn(a, cols.get(String(a.id), Color("475569")), 158, 94))
+		var bs := _action_btn({"id": "menu_skills", "label": "PODERES", "sub": "%d disponibles" % cur_actions.skills.size(), "enabled": not cur_actions.skills.is_empty(), "icon": "spell"}, Color("7e22ce"), 158, 94)
+		for c in bs.pressed.get_connections():
+			bs.pressed.disconnect(c.callable)
 		bs.pressed.connect(func():
 			sub_mode = "skills"
 			_build_actions())
 		grid.add_child(bs)
-		var bp := _btn("POCIONES\nVida %d · Energía %d" % [GameState.potion_count("vida"), GameState.potion_count("energia")], cols[5], 14, 168, 78)
+		var bp := _action_btn({"id": "menu_potions", "label": "POCIONES", "sub": "Vida %d · En %d" % [GameState.potion_count("vida"), GameState.potion_count("energia")], "enabled": true, "icon": "potion_hp"}, Color("15803d"), 158, 94)
+		for c in bp.pressed.get_connections():
+			bp.pressed.disconnect(c.callable)
 		bp.pressed.connect(func():
 			sub_mode = "potions"
 			_build_actions())
 		grid.add_child(bp)
-		var sr := _btn("RENDIRSE", Color("44403c"), 16, 168, 78)
-		sr.pressed.connect(func(): surrender_pressed.emit())
-		grid.add_child(sr)
 		act_box.add_child(grid)
-		act_box.add_child(_lbl("Cada ataque gasta energía. Defender la recupera.", 13, C_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
 	else:
 		var list: Array = cur_actions.skills if sub_mode == "skills" else cur_actions.potions
-		act_box.add_child(_lbl("PODERES" if sub_mode == "skills" else "POCIONES", 22, C_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+		act_box.add_child(_lbl("PODERES Y MAGIA" if sub_mode == "skills" else "POCIONES", 22, C_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 		for a in list:
-			var b := _action_btn(a, Color("7e22ce") if sub_mode == "skills" else Color("15803d"), 500, 58)
-			act_box.add_child(b)
-		var back := _btn("VOLVER", Color("57534e"), 20, 500, 50)
+			act_box.add_child(_action_btn(a, Color("7e22ce") if sub_mode == "skills" else Color("15803d"), 488, 52, true))
+		var back := _btn("VOLVER", Color("57534e"), 20, 488, 46)
 		back.pressed.connect(func():
 			sub_mode = "main"
 			_build_actions())

@@ -47,19 +47,21 @@ const TABS := ["weapon", "helmet", "armor", "shield", "outfit", "cape", "paint",
 const TAB_NAMES := {"weapon": "Armas", "helmet": "Cascos", "armor": "Armaduras", "shield": "Escudos", "outfit": "Trajes", "cape": "Capas", "paint": "Pinturas", "potion": "Pociones"}
 
 const STATS := ["vit", "fue", "agi", "def", "ene"]
-const STAT_NAMES := {"vit": "Vitalidad", "fue": "Fuerza", "agi": "Agilidad", "def": "Defensa", "ene": "Energía"}
+const STAT_NAMES := {"vit": "Vida", "fue": "Ataque", "agi": "Puntería", "def": "Defensa", "ene": "Energía"}
 const STAT_DESC := {
-	"vit": "Más vida máxima.",
-	"fue": "Más daño con cada golpe.",
-	"agi": "Más probabilidad de acertar.",
+	"vit": "Más vida para aguantar más golpes.",
+	"fue": "Más daño con cada golpe y más críticos.",
+	"agi": "Aciertas más y esquivas mejor.",
 	"def": "Reduce el daño recibido.",
-	"ene": "Más energía para atacar.",
+	"ene": "Más energía y más poder mágico.",
 }
 
 # Poderes que se desbloquean con el nivel
 const SKILLS := [
 	{"id": "torbellino", "name": "Torbellino", "lvl": 2, "en": 16, "mult": 1.9, "acc": -0.05, "desc": "Giro devastador."},
+	{"id": "bola", "name": "Bola de fuego", "lvl": 3, "en": 16, "mag": 1.0, "acc": 0.0, "ranged": true, "color": "f97316", "desc": "Magia a distancia."},
 	{"id": "escudazo", "name": "Escudazo", "lvl": 4, "en": 14, "mult": 0.9, "acc": 0.1, "stun": 1, "desc": "Aturde al rival 1 turno."},
+	{"id": "rayo", "name": "Rayo", "lvl": 5, "en": 22, "mag": 1.6, "acc": 0.12, "ranged": true, "color": "60a5fa", "desc": "Casi nunca falla."},
 	{"id": "furia", "name": "Furia titán", "lvl": 6, "en": 26, "mult": 2.9, "acc": -0.1, "desc": "El golpe más fuerte."},
 	{"id": "plegaria", "name": "Plegaria", "lvl": 8, "en": 22, "heal": 0.45, "desc": "Recupera el 45% de vida."},
 ]
@@ -289,6 +291,7 @@ func player_fighter() -> Dictionary:
 		"fue": stat("fue") + float(fx.fue), "agi": stat("agi") + float(fx.agi),
 		"def": stat("def") * 1.2 + int(h.def) + int(a.def) + int(s.def) + float(fx.def),
 		"wdmg": int(w.dmg), "wacc": float(w.acc),
+		"magic": 10.0 + stat("ene") * 1.4 + level() * 1.5, "weapon_id": w.id, "armed": true, "shield_def": int(s.def), "shield_max": int(s.def) * 14,
 		"acc_high": float(fx.acc_high), "acc_low": float(fx.acc_low), "evade": float(fx.evade), "regen": float(fx.regen),
 		"look": {"kind": "human", "skin": ch.skin, "cloth": ch.cloth, "hair": ch.hair, "hair_c": ch.hair_c, "beard": ch.beard,
 			"height": float(ch.height), "fat": float(ch.fat),
@@ -314,6 +317,7 @@ func enemy_fighter(i: int) -> Dictionary:
 		"fue": 3.5 + i * 1.5 + (2 if boss else 0), "agi": 4 + i * 1.1,
 		"def": 1.5 + i * 1.3 + (3 if boss else 0),
 		"wdmg": int(w.dmg) + (3 if boss else 0), "wacc": float(w.acc),
+		"magic": 8.0 + i * 2.4, "weapon_id": w.id, "armed": true, "shield_def": int(item_def("shield", String(e.shield)).def), "shield_max": int(item_def("shield", String(e.shield)).def) * 14,
 		"acc_high": 0.06 if big > 1.2 else 0.0, "acc_low": 0.0, "evade": -0.04 if big > 1.2 else 0.0, "regen": 0.0,
 		"look": {"kind": e.kind, "skin": e.skin, "cloth": e.cloth, "weapon": e.weapon, "helmet": e.helmet, "armor": "none", "shield": e.shield, "scale": big},
 	}
