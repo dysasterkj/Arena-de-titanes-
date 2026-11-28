@@ -2,6 +2,7 @@ extends Node
 ## Datos del juego: equipo, enemigos, estadísticas, progreso y guardado.
 
 const SAVE_PATH := "user://arena_de_titanes.json"
+const StoryData = preload("res://scripts/story.gd")
 
 const WEAPONS := [
 	{"id": "espada_corta", "name": "Espada corta", "cost": 0, "dmg": 6, "acc": 0.0, "desc": "Ligera y fiable."},
@@ -41,6 +42,9 @@ const SHIELDS := [
 const POTIONS := {
 	"vida": {"name": "Poción de vida", "cost": 45, "desc": "Recupera el 50% de tu vida."},
 	"energia": {"name": "Poción de energía", "cost": 35, "desc": "Recupera el 60% de tu energía."},
+	"vida_mayor": {"name": "Poción de vida mayor", "cost": 120, "lvl": 5, "desc": "Recupera TODA tu vida."},
+	"energia_mayor": {"name": "Poción de energía mayor", "cost": 95, "lvl": 5, "desc": "Recupera TODA tu energía."},
+	"furia": {"name": "Poción de furia", "cost": 150, "lvl": 8, "desc": "+5 de ataque durante todo el combate."},
 }
 
 const TABS := ["weapon", "helmet", "armor", "shield", "outfit", "cape", "paint", "potion"]
@@ -102,7 +106,7 @@ func _ready() -> void:
 
 func default_data() -> Dictionary:
 	return {
-		"gold": 60, "xp": 0, "points": 0,
+		"gold": 60, "xp": 0, "points": 0, "name": "Gladiador",
 		"stats": {"vit": 5, "fue": 5, "agi": 5, "def": 5, "ene": 5},
 		"owned": ["weapon:espada_corta"], "upg": {},
 		"equip": {"weapon": "espada_corta", "helmet": "none", "armor": "none", "shield": "none", "outfit": "none", "cape": "none", "paint": "none"},
@@ -111,6 +115,7 @@ func default_data() -> Dictionary:
 		"potions": {"vida": 2, "energia": 1},
 		"wins": {}, "fights": 0, "victories": 0,
 		"music": true, "sfx": true,
+		"story": {"lineage": "", "ch": 0, "lv": 0, "intro_seen": false, "outro_seen": true, "done": {}},
 	}
 
 
@@ -345,6 +350,22 @@ func add_xp(n: int) -> Array:
 		for s in SKILLS:
 			if int(s.lvl) == l:
 				msgs.append("Nuevo poder: %s" % s.name)
+		if l > 1:
+			for a in ARENA_LVL.size():
+				if int(ARENA_LVL[a]) == l:
+					msgs.append("¡Nueva arena: %s!" % ARENAS[a].name)
+			var unl: Array = []
+			for tab in TABS:
+				if tab == "potion":
+					for pid in POTIONS:
+						if int(POTIONS[pid].get("lvl", 1)) == l:
+							unl.append(String(POTIONS[pid].name))
+				else:
+					for it in items(tab):
+						if it.id != "none" and req_level(tab, String(it.id)) == l:
+							unl.append(String(it.name))
+			if unl.size() > 0:
+				msgs.append("Tienda: " + ", ".join(unl.slice(0, 3)) + ("…" if unl.size() > 3 else ""))
 	save_game()
 	return msgs
 
@@ -355,6 +376,58 @@ func unlocked_skills() -> Array:
 		if level() >= int(s.lvl):
 			out.append(s)
 	return out
+
+
+# ---------- Modo historia ----------
+func story_lineage() -> String:
+	return String((data.story as Dictionary).get("lineage", ""))
+
+
+func lin_kind() -> String:
+	var l := story_lineage()
+	return String(StoryData.lineage(l).kind) if l != "" else "human"
+
+
+func story_set_lineage(id: String) -> void:
+	var lin: Dictionary = StoryData.lineage(id)
+	data.story = {"lineage": id, "ch": 0, "lv": 0, "intro_seen": false, "outro_seen": true, "done": {}}
+	for k in ["skin", "hair", "hair_c", "beard", "height", "fat"]:
+		if lin.has(k):
+			data.char[k] = lin[k]
+	if lin.has("beard_c"):
+		data.char["beard_c"] = lin.beard_c
+	save_game()
+
+
+func story_reset() -> void:
+	data.story = {"lineage": "", "ch": 0, "lv": 0, "intro_seen": false, "outro_seen": true, "done": {}}
+	save_game()
+
+
+func story_done(ch: int, lv: int) -> bool:
+	return (data.story.done as Dictionary).has("%d_%d" % [ch, lv])
+
+
+## Registra la victoria de un nivel y avanza. Devuelve [recompensa, mensajes, capítuloCompleto].
+func story_win(ch: int, lv: int) -> Array:
+	var first := not story_done(ch, lv)
+	var r: Dictionary = StoryData.reward(ch, lv, first)
+	data.gold = int(data.gold) + int(r.gold)
+	data.victories = int(data.victories) + 1
+	data.story.done["%d_%d" % [ch, lv]] = 1
+	var msgs: Array = add_xp(int(r.xp))
+	var finished := false
+	if ch == int(data.story.ch) and lv == int(data.story.lv):
+		if lv + 1 >= StoryData.LEVELS:
+			finished = true
+			data.story.ch = ch + 1
+			data.story.lv = 0
+			data.story.intro_seen = false
+			data.story.outro_seen = false
+		else:
+			data.story.lv = lv + 1
+	save_game()
+	return [r, msgs, finished]
 
 
 # ---------- Cálculos de combate ----------
@@ -368,22 +441,70 @@ func player_fighter() -> Dictionary:
 	var ch: Dictionary = data.char
 	var pk := perk_bonus()
 	var sdef := eff_def("shield", s)
-	return {
-		"name": "Tú", "is_player": true, "level": level(),
+	var f := {
+		"name": String(data.get("name", "Gladiador")), "is_player": true, "level": level(),
 		"max_hp": (40 + stat("vit") * 10 + int(pk.vit) * 8) * float(fx.hp), "max_en": (20 + stat("ene") * 6 + int(pk.ene) * 5) * float(fx.en),
 		"fue": stat("fue") + float(fx.fue) + int(pk.fue), "agi": stat("agi") + float(fx.agi) + int(pk.agi),
 		"def": stat("def") * 1.2 + eff_def("helmet", h) + eff_def("armor", a) + sdef + float(fx.def) + int(pk.def),
 		"wdmg": eff_dmg("weapon", w), "wacc": float(w.acc),
 		"magic": 10.0 + stat("ene") * 1.4 + level() * 1.5, "weapon_id": w.id, "armed": true, "shield_def": sdef, "shield_max": sdef * 14,
 		"acc_high": float(fx.acc_high), "acc_low": float(fx.acc_low), "evade": float(fx.evade), "regen": float(fx.regen),
-		"look": {"kind": "human", "skin": ch.skin, "cloth": ch.cloth, "hair": ch.hair, "hair_c": ch.hair_c, "beard": ch.beard,
+		"look": {"kind": lin_kind(), "skin": ch.skin, "cloth": ch.cloth, "hair": ch.hair, "hair_c": ch.hair_c, "beard": ch.beard, "beard_c": ch.get("beard_c", ch.hair_c),
 			"height": float(ch.height), "fat": float(ch.fat),
 			"weapon": w.id, "helmet": h.id, "armor": a.id, "shield": s.id,
 			"outfit": equipped("outfit"), "cape": equipped("cape"), "paint": equipped("paint")},
 	}
+	# bonos del linaje (modo historia)
+	match story_lineage():
+		"elfo":
+			f.max_en = float(f.max_en) * 1.15
+			f.magic = float(f.magic) * 1.15
+			f.max_hp = float(f.max_hp) * 0.92
+		"orco":
+			f.fue = float(f.fue) + 2.0
+			f.agi = float(f.agi) - 1.0
+		"enano":
+			f.def = float(f.def) + 2.0
+			f.agi = float(f.agi) - 1.0
+	return f
 
 
-func enemy_fighter(i: int) -> Dictionary:
+## Elige el rival real de un combate: casi siempre el del puesto, pero a veces toca uno
+## más fuerte (o un "élite"), así que repetir un combate nunca es un paseo seguro.
+func pick_enemy(i: int) -> Dictionary:
+	var r := randf()
+	var j := i
+	var last := ENEMIES.size() - 1
+	if r < 0.22 and i < last:
+		j = i + 1
+	elif r < 0.30 and i + 1 < last:
+		j = i + 2
+	elif r < 0.45 and i > 0:
+		j = i - 1
+	var elite := randf() < 0.18
+	# más duros cuanto más nivel tengas en comparación con el rival
+	return {"idx": j, "elite": elite}
+
+
+func enemy_fighter(i: int, elite: bool = false) -> Dictionary:
+	var f := _enemy_base(i)
+	# adaptación: si tu nivel va muy por delante, los rivales se endurecen un poco
+	var over := maxf(0.0, float(level()) - float(i + 3))
+	var k := 1.0 + minf(0.6, over * 0.05) + (0.28 if elite else 0.0)
+	if k > 1.0:
+		f.max_hp = float(int(round(float(f.max_hp) * k)))
+		f.fue = float(f.fue) * (1.0 + (k - 1.0) * 0.6)
+		f.def = float(f.def) * (1.0 + (k - 1.0) * 0.5)
+		f.magic = float(f.magic) * (1.0 + (k - 1.0) * 0.6)
+		f.wdmg = int(round(float(f.wdmg) * (1.0 + (k - 1.0) * 0.5)))
+	if elite:
+		f.name = "Élite " + String(f.name)
+		f.look.scale = float(f.look.scale) * 1.08
+		f.elite = true
+	return f
+
+
+func _enemy_base(i: int) -> Dictionary:
 	var e: Dictionary = ENEMIES[i]
 	var w := item_def("weapon", String(e.weapon))
 	var boss: bool = bool(e.get("boss", false))
@@ -415,7 +536,23 @@ func reward_for(i: int, first_time: bool) -> Dictionary:
 	return {"gold": gold, "xp": xp}
 
 
+const ARENA_LVL := [1, 4, 7, 10]
+
+
+func arena_unlocked(a: int) -> bool:
+	return level() >= int(ARENA_LVL[a])
+
+
+func req_level(tab: String, id: String) -> int:
+	if tab == "potion":
+		return int(POTIONS[id].get("lvl", 1))
+	var it := item_def(tab, id)
+	return 1 + int(sqrt(float(it.get("cost", 0)) / 45.0))
+
+
 func fight_unlocked(i: int) -> bool:
+	if not arena_unlocked(int(ENEMIES[i].arena)):
+		return false
 	return i == 0 or (data.wins as Dictionary).has(str(i - 1))
 
 
@@ -424,9 +561,12 @@ func fight_won(i: int) -> bool:
 
 
 ## Registra la victoria y devuelve [recompensa, mensajes].
-func register_win(i: int) -> Array:
+func register_win(i: int, enemy_idx: int = -1, elite: bool = false) -> Array:
 	var first := not fight_won(i)
-	var r := reward_for(i, first)
+	var r := reward_for(maxi(i, enemy_idx), first)
+	if elite:
+		r.gold = int(int(r.gold) * 1.5)
+		r.xp = int(int(r.xp) * 1.5)
 	data.gold = int(data.gold) + int(r.gold)
 	data.wins[str(i)] = 1
 	data.victories = int(data.victories) + 1
@@ -435,11 +575,13 @@ func register_win(i: int) -> Array:
 	return [r, msgs]
 
 
-func register_loss() -> void:
+## Perder también enseña: da un poco de oro y experiencia. Devuelve los mensajes de nivel.
+func register_loss(i: int = 0) -> Array:
 	data.fights = int(data.fights) + 1
-	# consuelo: un poco de oro para no quedarse atascado
 	data.gold = int(data.gold) + 12
+	var msgs: Array = add_xp(int(reward_for(i, true).xp * 0.35))
 	save_game()
+	return msgs
 
 
 # ======================= Personaje editable =======================
@@ -516,6 +658,13 @@ func cycle_char(key: String, dir: int) -> void:
 	var list := char_list(key)
 	var i := wrapi(char_index(key) + dir, 0, list.size())
 	data.char[key] = list[i].value
+	save_game()
+
+
+func randomize_char() -> void:
+	for key in ["skin", "hair", "hair_c", "beard", "cloth"]:
+		var list := char_list(key)
+		data.char[key] = list[randi() % list.size()].value
 	save_game()
 
 

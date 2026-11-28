@@ -5,6 +5,7 @@ const ArenaScript = preload("res://scripts/arena.gd")
 const FighterScript = preload("res://scripts/fighter.gd")
 const UiScript = preload("res://scripts/ui.gd")
 const Toon = preload("res://scripts/toon.gd")
+const StoryScript = preload("res://scripts/story.gd")
 
 enum State { MENU, BATTLE, RESULT }
 
@@ -23,9 +24,13 @@ var camera: Camera3D
 var p: Dictionary = {}
 var e: Dictionary = {}
 var fight_idx := 0
+var story_ch := -1
+var story_lv := 0
+var enemy_idx := 0
+var enemy_elite := false
 var busy := false
 var cam_mode := "menu"
-var cam_pos := Vector3(2, 1.6, 5)
+var cam_pos := Vector3(0, 0.0, 7.0)
 var cam_look := Vector3(0, 1.0, 0)
 var view_style := "side"
 var shake := 0.0
@@ -39,7 +44,9 @@ var shot_path := ""
 var shot_frame := 0
 var test_view := ""
 var test_fight := -1
+var test_story := ""
 var test_page := ""
+var test_tab := ""
 var test_set := ""
 var test_level := 0
 var test_hurt := false
@@ -62,8 +69,12 @@ func _ready() -> void:
 			test_view = a.substr(7)
 		elif a.begins_with("--fight="):
 			test_fight = int(a.substr(8))
+		elif a.begins_with("--story="):
+			test_story = a.substr(8)
 		elif a.begins_with("--camz="):
 			test_camz = float(a.substr(7))
+		elif a.begins_with("--tab="):
+			test_tab = a.substr(6)
 		elif a.begins_with("--demo="):
 			test_demo = a.substr(7)
 		elif a == "--hurt":
@@ -101,14 +112,19 @@ func _ready() -> void:
 		fg.swung.connect(_on_swung)
 		fg.stepped.connect(func(): Sfx.play("step", rng.randf_range(0.9, 1.1), -6.0))
 	camera = Camera3D.new()
-	camera.fov = 56.0
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 9.0
+	camera.near = 0.05
 	camera.far = 200.0
 	add_child(camera)
 	camera.current = true
 	ui = UiScript.new()
 	add_child(ui)
 	ui.camera_ref = camera
-	ui.fight_selected.connect(_start_fight)
+	ui.fight_selected.connect(func(i: int):
+		story_ch = -1
+		_start_fight(i))
+	ui.story_fight.connect(_start_story)
 	ui.action_pressed.connect(_on_action)
 	ui.surrender_pressed.connect(func(): if not busy: _end_fight(false, true))
 	ui.continue_pressed.connect(_to_menu)
@@ -127,10 +143,24 @@ func _ready() -> void:
 		ui.open_shop()
 	elif test_page == "train":
 		ui.open_train()
+	elif test_page == "result":
+		ui.show_result(true, "¡VICTORIA!", ["Ganas 120 de oro.", "243 xp ganados en este combate.", "¡HAS SUBIDO DE NIVEL! Nivel 5", "Desbloqueas: Arena 2"])
 	elif test_page == "fights":
 		ui.open_fights()
+	elif test_page == "story":
+		ui.open_story()
+	if test_story != "":
+		var sp := test_story.split(",")
+		GameState.story_set_lineage(sp[0])
+		GameState.data.story.ch = int(sp[1])
+		GameState.data.story.lv = int(sp[2])
+		GameState.data.story.intro_seen = true
+		_refresh_preview()
+		_start_story(int(sp[1]), int(sp[2]))
 	if test_fight >= 0:
 		_start_fight(test_fight)
+		if test_tab != "":
+			ui._open_tab(test_tab)
 	_cleanup_update_file()
 	_check_update()
 
@@ -149,17 +179,17 @@ func _refresh_preview() -> void:
 		lk[k] = ui.preview_ov[k]
 	pf.setup(lk)
 	pf.position = Vector3.ZERO
-	pf.rotation.y = PI + 0.22 if pf.relaxed else PI * 0.82
+	pf.rotation.y = -PI / 2.0
 	ef.visible = false
 
 
 func _on_page(page: String) -> void:
 	if state != State.MENU:
 		return
-	cam_mode = "menu" if page in ["menu", "update", "fights", "ach"] else ("char" if page == "char" else "shop")
+	cam_mode = "menu" if page in ["menu", "update", "fights", "ach", "story"] else ("char" if page == "char" else "shop")
 	if (page == "char") != pf.relaxed:
 		pf.relaxed = page == "char"
-		pf.rotation.y = PI + 0.22 if pf.relaxed else PI * 0.82
+		pf.rotation.y = -PI / 2.0
 
 
 func _to_menu() -> void:
@@ -176,44 +206,34 @@ func _to_menu() -> void:
 
 
 func _update_camera(delta: float) -> void:
-	var pos := cam_pos
-	var look := cam_look
+	# cámara ortográfica: (x, y) = centro de la vista, z = alto visible en metros
+	var tgt := cam_pos
 	match cam_mode:
 		"menu":
-			pos = Vector3(2.6, 1.9, 6.4)
-			look = Vector3(0, 0.95, 0)
+			tgt = Vector3(0.0, 0.95 - 0.12 * 7.4 + 0.55, 7.4)
 		"char":
 			var hgt := float(GameState.data.char.height)
-			var head_y := 1.98 * hgt + 0.05
 			if ui.char_focus in ["skin", "hair", "hair_c", "beard"]:
-				pos = Vector3(0.0, head_y + 0.1, 5.2)
-				look = Vector3(0, head_y + 0.2, 0)
+				var head_y := 1.8 * hgt
+				tgt = Vector3(0.0, head_y - 0.3125 * 2.9, 2.9)
 			else:
-				pos = Vector3(0.0, 2.0 + (hgt - 1.0) * 2.0, 7.4 + (hgt - 1.0) * 7.0)
-				look = Vector3(0, 0.35 + (hgt - 1.0) * 1.8, 0)
+				var sz := (5.6 * hgt + 0.6) * 1.32
+				tgt = Vector3(0.0, 1.05 * hgt - 0.3125 * sz, sz)
 		"shop":
-			pos = Vector3(2.2, 2.0, 8.4)
-			look = Vector3(0, 0.35, 0)
+			tgt = Vector3(0.0, 1.05 - 0.3125 * 8.4 + 0.6, 8.4)
 		"battle":
-			if view_style == "side":
-				pos = Vector3((pf.position.x + ef.position.x) * 0.5, 2.1, test_camz if test_camz > 0.0 else 9.0)
-				camera.fov = lerpf(camera.fov, 58.0 - cam_punch * 6.0, 0.3)
-				look = Vector3((pf.position.x + ef.position.x) * 0.5, 0.62, 0)
-			else:
-				pos = Vector3(-4.4, 3.3, 8.6)
-				camera.fov = lerpf(camera.fov, 58.0 - cam_punch * 6.0, 0.3)
-				look = Vector3(0.7, 0.0, -0.8)
-	var vo := -1.75 if cam_mode == "shop" else (-1.75 if cam_mode == "char" else (-0.5 if cam_mode == "battle" else 0.0))
-	camera.v_offset = lerpf(camera.v_offset, vo, 1.0 - exp(-5.0 * delta))
+			var sz := clampf((_gap() + 2.8) / 0.5625, 6.6, 13.0) - cam_punch * 0.5
+			if test_camz > 0.0:
+				sz = test_camz
+			tgt = Vector3((pf.position.x + ef.position.x) * 0.5, -0.05 * sz, sz)
 	var k := 1.0 - exp(-4.0 * delta)
-	cam_pos = cam_pos.lerp(pos, k)
-	cam_look = cam_look.lerp(look, k)
+	cam_pos = cam_pos.lerp(tgt, k)
 	var off := Vector3.ZERO
 	if shake > 0.0:
 		shake = maxf(0.0, shake - delta * 2.5)
-		off = Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), 0) * shake * 0.25
-	camera.position = cam_pos + off
-	camera.look_at(cam_look)
+		off = Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), 0) * shake * 0.12
+	camera.size = cam_pos.z
+	camera.position = Vector3(cam_pos.x, cam_pos.y, 20.0) + off
 
 
 func _process(delta: float) -> void:
@@ -226,11 +246,12 @@ func _process(delta: float) -> void:
 	if state == State.BATTLE:
 		cheer_level = move_toward(cheer_level, 1.0, delta * 0.7)
 		arena.set_cheer(cheer_level)
+		ui.set_crowd(cheer_level / 2.2)
 	_update_camera(delta)
 	if state == State.MENU and cam_mode == "menu" and ui.pages["menu"].visible:
 		drag_idle = maxf(0.0, drag_idle - delta)
 		if drag_idle <= 0.0:
-			pf.rotation.y += delta * 0.25
+			pass
 	if autoplay:
 		_bot(delta)
 	if shot_path != "" and frame_count == shot_frame:
@@ -245,7 +266,7 @@ func _take_shot() -> void:
 
 
 # ---------- Combate ----------
-const FAR_GAP := 3.8
+const FAR_GAP := 3.4
 const NEAR_GAP := 1.5
 
 var near := false
@@ -274,6 +295,12 @@ func _dir_to(from: Node3D, to: Node3D) -> float:
 	return signf(to.position.x - from.position.x)
 
 
+func _start_story(ch: int, lv: int) -> void:
+	story_ch = ch
+	story_lv = lv
+	_start_fight(0)
+
+
 func _start_fight(i: int) -> void:
 	fight_idx = i
 	state = State.BATTLE
@@ -288,7 +315,15 @@ func _start_fight(i: int) -> void:
 	p.limp = 0
 	p.weak = 0
 	p.shield_hp = float(p.shield_max)
-	e = GameState.enemy_fighter(i)
+	if story_ch >= 0:
+		enemy_idx = i
+		enemy_elite = false
+		e = StoryScript.enemy_fighter(story_ch, story_lv, GameState.story_lineage())
+	else:
+		var pick: Dictionary = GameState.pick_enemy(i)
+		enemy_idx = int(pick.idx)
+		enemy_elite = bool(pick.elite)
+		e = GameState.enemy_fighter(enemy_idx, enemy_elite)
 	e.hp = float(e.max_hp)
 	e.en = float(e.max_en)
 	e.guard = false
@@ -297,7 +332,7 @@ func _start_fight(i: int) -> void:
 	e.weak = 0
 	e.shield_hp = float(e.shield_max)
 	enemy_potion = false
-	arena.set_theme(int(GameState.ENEMIES[i].arena))
+	arena.set_theme(int(StoryScript.CHAPTERS[story_ch].arena) if story_ch >= 0 else int(GameState.ENEMIES[i].arena))
 	arena.set_cheer(1.0)
 	Sfx.play_music("battle")
 	pf.setup(p.look)
@@ -314,7 +349,12 @@ func _start_fight(i: int) -> void:
 	ui.show_battle()
 	ui.hide_actions()
 	_refresh()
-	ui.set_log("¡%s te desafía!" % e.name)
+	if enemy_elite:
+		ui.set_log("¡%s te desafía! Es un rival ÉLITE" % e.name, Color("fca5a5"))
+	elif enemy_idx > fight_idx:
+		ui.set_log("¡%s te desafía! Más fuerte de lo normal" % e.name, Color("fdba74"))
+	else:
+		ui.set_log("¡%s te desafía!" % e.name)
 	Sfx.play("crowd")
 	await get_tree().create_timer(1.3).timeout
 	ui.banner("¡PELEA!")
@@ -396,10 +436,13 @@ func _player_actions() -> Dictionary:
 		if bool(s.get("ranged", false)):
 			sub += " · a distancia"
 		skills.append({"id": "skill:" + String(s.id), "label": String(s.name), "sub": sub, "enabled": float(p.en) >= float(s.en), "icon": "spell" if bool(s.get("ranged", false)) else ("heal" if s.has("heal") else "power")})
-	var pots: Array = [
-		{"id": "potion:vida", "label": "Poción de vida (x%d)" % GameState.potion_count("vida"), "sub": "+50% vida", "enabled": GameState.potion_count("vida") > 0, "icon": "potion_hp"},
-		{"id": "potion:energia", "label": "Poción de energía (x%d)" % GameState.potion_count("energia"), "sub": "+60% energía", "enabled": GameState.potion_count("energia") > 0, "icon": "potion_en"},
-	]
+	var pots: Array = []
+	for pid in GameState.POTIONS:
+		var pd: Dictionary = GameState.POTIONS[pid]
+		if GameState.level() < int(pd.get("lvl", 1)):
+			continue
+		var cnt := GameState.potion_count(String(pid))
+		pots.append({"id": "potion:" + String(pid), "label": "%s (x%d)" % [pd.name, cnt], "sub": String(pd.desc), "enabled": cnt > 0, "icon": "potion_en" if String(pid).begins_with("energia") else ("power" if pid == "furia" else "potion_hp")})
 	return {"main": main, "skills": skills, "potions": pots, "near": not far}
 
 
@@ -479,19 +522,25 @@ func _potion(kind: String) -> void:
 	pf.drink()
 	Sfx.play("potion")
 	await get_tree().create_timer(0.5).timeout
-	if kind == "vida":
-		var h := float(p.max_hp) * 0.5
-		p.hp = minf(float(p.max_hp), float(p.hp) + h)
-		pf.set_health(float(p.hp) / float(p.max_hp))
-		ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d" % int(h), Color("4ade80"))
-		ui.set_log("¡Bebes una poción de vida!", Color("86efac"))
-	else:
-		var g := float(p.max_en) * 0.6
-		p.en = minf(float(p.max_en), float(p.en) + g)
-		ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d EN" % int(g), Color("7dd3fc"))
-		ui.set_log("¡Bebes una poción de energía!", Color("7dd3fc"))
+	match kind:
+		"vida", "vida_mayor":
+			var h := float(p.max_hp) * (0.5 if kind == "vida" else 1.0)
+			p.hp = minf(float(p.max_hp), float(p.hp) + h)
+			pf.set_health(float(p.hp) / float(p.max_hp))
+			ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d" % int(h), Color("4ade80"))
+			ui.set_log("¡Bebes una poción de vida!", Color("86efac"))
+		"furia":
+			p.fue = float(p.fue) + 5.0
+			ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "¡+5 ATAQUE!", Color("fb923c"))
+			ui.set_log("¡La furia te recorre el cuerpo!", Color("fdba74"))
+		_:
+			var g := float(p.max_en) * (0.6 if kind == "energia" else 1.0)
+			p.en = minf(float(p.max_en), float(p.en) + g)
+			ui.float_text(pf.global_position + Vector3(0, 2.4, 0), "+%d EN" % int(g), Color("7dd3fc"))
+			ui.set_log("¡Bebes una poción de energía!", Color("7dd3fc"))
 	_refresh()
 	await get_tree().create_timer(0.6).timeout
+
 
 
 func _skill(id: String) -> bool:
@@ -632,20 +681,16 @@ func _blood(df: Node3D, dirx: float, d: int, crit: bool, zone: String) -> void:
 			var land := drop.position
 			drop.queue_free()
 			if not spark:
-				_stain(Vector3(land.x, 0.015, land.z), col))
+				_stain(Vector3(land.x, 0.0, 0.0), col))
 
 
 func _stain(pos: Vector3, col: Color) -> void:
 	var st := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	var r := rng.randf_range(0.07, 0.24)
-	cyl.top_radius = r
-	cyl.bottom_radius = r
-	cyl.height = 0.012
-	cyl.radial_segments = 10
-	st.mesh = cyl
+	var r := rng.randf_range(0.08, 0.26)
+	st.mesh = Toon.sphere(r)
 	st.material_override = Toon.glow_mat(col.darkened(0.15))
-	st.position = Vector3(pos.x, 0.012 + rng.randf() * 0.004, pos.z)
+	st.scale = Vector3(1.0, 0.2, 0.05)
+	st.position = Vector3(pos.x, -0.04 - rng.randf() * 0.32, -0.4)
 	add_child(st)
 	debris.append(st)
 	if debris.size() > 140:
@@ -659,7 +704,7 @@ func _melee(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dic
 	att.en = float(att.en) - float(spec.cost)
 	_refresh()
 	var far := _gap() > NEAR_GAP + 0.6
-	ui.set_log("%s usa %s" % ["Tú" if bool(att.is_player) else String(att.name), String(spec.label)])
+	ui.set_log("%s usa %s" % [String(att.name), String(spec.label)])
 	var reach := maxf(0.0, _gap() - NEAR_GAP)
 	var acc := float(spec.acc) - (0.1 if far else 0.0)
 	var zone := String(spec.get("zone", "body"))
@@ -743,7 +788,7 @@ func _throw(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D) -> bool:
 func _cast(att: Dictionary, defn: Dictionary, af: Node3D, df: Node3D, spec: Dictionary) -> bool:
 	att.en = float(att.en) - float(spec.en)
 	_refresh()
-	ui.set_log("¡%s lanza %s!" % ["Tú" if bool(att.is_player) else String(att.name), String(spec.name)])
+	ui.set_log("¡%s lanza %s!" % [String(att.name), String(spec.name)])
 	var col := Color(String(spec.get("color", "f97316")))
 	var from: Vector3 = await af.cast_start(col)
 	Sfx.play("fire")
@@ -891,18 +936,21 @@ func _end_fight(win: bool, surrender: bool = false) -> void:
 		pf.victory()
 		Sfx.play("win")
 		ui.set_log("¡VICTORIA!", Color("4ade80"))
-		var first_time := not GameState.fight_won(fight_idx)
+		var first_time := not (GameState.story_done(story_ch, story_lv) if story_ch >= 0 else GameState.fight_won(fight_idx))
 		if bool(e.get("boss", false)) and first_time:
 			GameState.bump("bosses")
 		if float(p.hp) >= float(p.max_hp):
 			GameState.bump("flawless")
-		var res: Array = GameState.register_win(fight_idx)
+		var res: Array = GameState.story_win(story_ch, story_lv) if story_ch >= 0 else GameState.register_win(fight_idx, enemy_idx, enemy_elite)
 		var r: Dictionary = res[0]
 		lines.append("Ganaste ● %d de oro" % int(r.gold))
 		lines.append("Ganaste %d XP" % int(r.xp))
 		for m in res[1]:
 			lines.append(String(m))
-		if fight_idx + 1 < GameState.ENEMIES.size() and int(GameState.ENEMIES[fight_idx + 1].arena) != int(GameState.ENEMIES[fight_idx].arena):
+		if story_ch >= 0:
+			if bool(res[2]):
+				lines.append("¡CAPÍTULO COMPLETADO!")
+		elif fight_idx + 1 < GameState.ENEMIES.size() and int(GameState.ENEMIES[fight_idx + 1].arena) != int(GameState.ENEMIES[fight_idx].arena):
 			lines.append("¡Nueva arena desbloqueada!")
 		elif fight_idx + 1 >= GameState.ENEMIES.size():
 			lines.append("¡Eres el campeón de la arena!")
@@ -911,20 +959,29 @@ func _end_fight(win: bool, surrender: bool = false) -> void:
 			pf.die()
 		Sfx.play("lose")
 		ui.set_log("Has caído..." if not surrender else "Te rindes", Color("f87171"))
-		GameState.register_loss()
+		var lmsgs: Array = GameState.register_loss(fight_idx)
 		lines.append("Perdiste contra %s" % e.name)
-		lines.append("Consuelo: +12 de oro")
+		lines.append("Consuelo: +12 de oro y algo de experiencia")
+		for lm in lmsgs:
+			lines.append(String(lm))
 		lines.append("Entrena, compra mejor equipo y vuelve.")
 	lines.append_array(GameState.new_achievements())
 	for ln2 in lines:
 		if String(ln2).begins_with("¡NIVEL"):
 			Sfx.play("levelup")
 	await get_tree().create_timer(1.8).timeout
-	ui.show_result(win, "¡VICTORIA!" if win else "DERROTA", lines, not (win and fight_idx + 1 >= GameState.ENEMIES.size()))
+	ui.show_result(win, "¡VICTORIA!" if win else "DERROTA", lines, story_ch >= 0 or not (win and fight_idx + 1 >= GameState.ENEMIES.size()))
 
 
 func _after_result() -> void:
 	if state != State.RESULT:
+		return
+	if story_ch >= 0:
+		if float(e.hp) <= 0.0:
+			_to_menu()
+			ui.open_story()
+		else:
+			_start_story(story_ch, story_lv)
 		return
 	var next := fight_idx
 	if float(e.hp) <= 0.0 and fight_idx + 1 < GameState.ENEMIES.size():
@@ -1238,8 +1295,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if state != State.MENU or cam_mode == "none":
 		return
 	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
-		pf.rotation.y += event.relative.x * 0.012
+		pass
 		drag_idle = 3.0
 	elif event is InputEventScreenDrag:
-		pf.rotation.y += event.relative.x * 0.012
+		pass
 		drag_idle = 3.0
